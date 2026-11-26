@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -44,32 +44,53 @@ class WebhookEventRepository:
             return existing, False
         return event, True
 
-    def list_pending(self, limit: int = 100) -> list[WebhookEvent]:
+    def claim_pending(
+        self, limit: int = 100, stale_after_seconds: int = 300
+    ) -> list[WebhookEvent]:
+        now = datetime.now(UTC)
+        stale_before = now - timedelta(seconds=stale_after_seconds)
         stmt = (
             select(WebhookEvent)
-            .where(WebhookEvent.status.in_(["received", "failed"]))
+            .where(
+                or_(
+                    WebhookEvent.status.in_(["received", "failed"]),
+                    (WebhookEvent.status == "processing")
+                    & (WebhookEvent.processing_started_at.is_not(None))
+                    & (WebhookEvent.processing_started_at < stale_before),
+                )
+            )
             .order_by(WebhookEvent.received_at.asc())
             .limit(limit)
+            .with_for_update(skip_locked=True)
         )
-        return list(self.db.scalars(stmt).all())
+        events = list(self.db.scalars(stmt).all())
+        for event in events:
+            event.status = "processing"
+            event.attempts = (event.attempts or 0) + 1
+            event.processing_started_at = now
+            event.last_error = None
+            self.db.add(event)
+        if events:
+            self.db.commit()
+            for event in events:
+                self.db.refresh(event)
+        return events
 
-    def mark_processing(self, event: WebhookEvent) -> None:
-        event.status = "processing"
-        event.attempts = (event.attempts or 0) + 1
-        event.last_error = None
-        self.db.add(event)
-        self.db.commit()
-        self.db.refresh(event)
+    def list_pending(self, limit: int = 100) -> list[WebhookEvent]:
+        # Backward-compatible name; now atomically claims events for processing.
+        return self.claim_pending(limit=limit)
 
     def mark_processed(self, event: WebhookEvent) -> None:
         event.status = "processed"
         event.processed_at = datetime.now(UTC)
+        event.processing_started_at = None
         event.last_error = None
         self.db.add(event)
         self.db.commit()
 
     def mark_failed(self, event: WebhookEvent, error: str) -> None:
         event.status = "failed"
+        event.processing_started_at = None
         event.last_error = error[:4000]
         self.db.add(event)
         self.db.commit()

@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
@@ -11,6 +12,30 @@ from app.services.webhooks.idempotency import build_event_key, detect_event_type
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["max-webhook"])
+
+SENSITIVE_KEYS = {
+    "phone",
+    "customer_phone",
+    "customer_phone_encrypted",
+    "token",
+    "secret",
+    "authorization",
+    "access_token",
+}
+
+
+def _redact_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            if str(key).lower() in SENSITIVE_KEYS:
+                redacted[key] = "***REDACTED***"
+            else:
+                redacted[key] = _redact_payload(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_payload(item) for item in value]
+    return value
 
 
 @router.post("/webhook/max")
@@ -26,6 +51,8 @@ async def max_webhook(
 
     if not isinstance(payload, dict):
         payload = {"_raw": payload}
+
+    payload = _redact_payload(payload)
 
     event_key = build_event_key(payload)
     event_type = detect_event_type(payload)

@@ -10,11 +10,11 @@ from app.services.webhooks.processor import WebhookEventProcessor
 logger = logging.getLogger(__name__)
 
 
-def process_pending_events(batch_size: int = 100) -> int:
+def process_pending_events(batch_size: int = 100, stale_after_seconds: int = 300) -> int:
     db = SessionLocal()
     try:
         repo = WebhookEventRepository(db)
-        events = repo.list_pending(limit=batch_size)
+        events = repo.claim_pending(limit=batch_size, stale_after_seconds=stale_after_seconds)
         processed = 0
         for event in events:
             processor = WebhookEventProcessor(db)
@@ -38,7 +38,10 @@ def run() -> None:
     )
     while True:
         try:
-            processed = process_pending_events()
+            processed = process_pending_events(
+                batch_size=settings.worker_batch_size,
+                stale_after_seconds=settings.worker_stale_processing_seconds,
+            )
             if processed:
                 logger.info("Processed %s webhook events", processed)
         except Exception:

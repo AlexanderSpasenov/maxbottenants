@@ -79,16 +79,23 @@ def test_worker_processes_pending_event(db_session, monkeypatch):
         event_type="message_created",
         payload=payload,
     )
+    db_session.commit()
     assert created
     assert event.status == "received"
 
-    # process via processor directly (uses same session)
+    # claim as worker would do
+    claimed = repo.claim_pending(limit=10)
+    assert len(claimed) == 1
+    claimed_event = claimed[0]
+    assert claimed_event.status == "processing"
+    assert claimed_event.attempts == 1
+
     processor = WebhookEventProcessor(db_session)
-    processor.process(event)
-    db_session.refresh(event)
-    assert event.status == "processed"
-    assert event.processed_at is not None
-    assert event.attempts == 1
+    processor.process(claimed_event)
+    db_session.refresh(claimed_event)
+    assert claimed_event.status == "processed"
+    assert claimed_event.processed_at is not None
+    assert claimed_event.attempts == 1
 
 
 def test_replay_fixture_is_idempotent(db_session):

@@ -22,13 +22,13 @@ class WebhookEventProcessor:
         self.repo = WebhookEventRepository(db)
 
     def process(self, event: WebhookEvent) -> None:
-        self.repo.mark_processing(event)
         try:
             logger.info(
-                "Processed webhook event id=%s key=%s type=%s",
+                "Processing webhook event id=%s key=%s type=%s attempts=%s",
                 event.id,
                 event.event_key,
                 event.event_type,
+                event.attempts,
             )
             # TODO Increment 4+: route by event_type/payload into dialog/booking services.
             self.repo.mark_processed(event)
