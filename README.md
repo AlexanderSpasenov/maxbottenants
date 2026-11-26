@@ -4,9 +4,9 @@
 
 ## Статус
 
-**Фаза 1 / Инкремент 1**: MVP-каркас.
+**Фаза 1 / Инкремент 2**: core мультитенантная модель данных.
 
-Реализовано в этом инкременте:
+Реализовано в Инкременте 1:
 - структура репозитория;
 - Docker Compose для `app`, `postgres`, `redis`, `worker`;
 - FastAPI + health endpoints;
@@ -15,9 +15,17 @@
 - pytest smoke-тесты;
 - заготовки под MAX mock/real client, Google Sheets source stub, workers.
 
+Реализовано в Инкременте 2:
+- ORM-модели core-сущностей: `tenants`, `tenant_members`, `tenant_links`, `dialog_sessions`, `customer_profiles`, `consent_records`, `services`, `masters`, `service_masters`, `master_working_hours`, `schedule_exceptions`, `bookings`, `webhook_events`, `outbox_messages`, `sync_log`;
+- Alembic-миграция `0002_core_multitenant_schema`;
+- seed двух тестовых салонов A/B (`scripts/seed_dev.py`);
+- репозитории с обязательным `tenant_id` для tenant-данных;
+- интеграционные тесты изоляции tenant (запускаются при настроенной тестовой БД).
+
 Пока не реализовано:
 - реальная интеграция MAX Bot API (нет токена/бота);
 - бизнес-сценарий `request_only` end-to-end;
+- webhook persistence/idempotency/dispatch;
 - Google Sheets sync;
 - `online_booking`.
 

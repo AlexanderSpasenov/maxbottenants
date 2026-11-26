@@ -34,6 +34,9 @@ include = ["app*"]
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
+markers = [
+  "integration: tests requiring a configured test database",
+]
 
 [tool.ruff]
 line-length = 100
