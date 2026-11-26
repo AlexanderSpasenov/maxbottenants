@@ -116,6 +116,58 @@ def test_booking_repository_tenant_scoping(db_session):
     assert [b.id for b in repo.list_for_user(t2.id, 100)] == [b2.id]
 
 
+
+def test_booking_composite_fk_blocks_cross_tenant_service(db_session):
+    t1 = _make_tenant("a5", "A5")
+    t2 = _make_tenant("b5", "B5")
+    db_session.add_all([t1, t2])
+    db_session.flush()
+
+    s2 = _make_service(t2.id, "svc2", "Svc B5", 200, 30)
+    db_session.add(s2)
+    db_session.flush()
+
+    db_session.add(
+        Booking(
+            tenant_id=t1.id,
+            max_user_id=100,
+            chat_id=1000,
+            service_id=s2.id,
+            status="awaiting_salon",
+            booking_mode="request_only",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_booking_composite_fk_blocks_cross_tenant_master(db_session):
+    t1 = _make_tenant("a6", "A6")
+    t2 = _make_tenant("b6", "B6")
+    db_session.add_all([t1, t2])
+    db_session.flush()
+
+    s1 = _make_service(t1.id, "svc1", "Svc A6", 100, 30)
+    m2 = Master(tenant_id=t2.id, external_key="m2", display_name="M2", is_active=True)
+    db_session.add_all([s1, m2])
+    db_session.flush()
+
+    db_session.add(
+        Booking(
+            tenant_id=t1.id,
+            max_user_id=100,
+            chat_id=1000,
+            service_id=s1.id,
+            master_id=m2.id,
+            status="awaiting_salon",
+            booking_mode="request_only",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
 def test_dialog_session_tracks_current_tenant(db_session):
     t1 = _make_tenant("a4", "A4")
     t2 = _make_tenant("b4", "B4")

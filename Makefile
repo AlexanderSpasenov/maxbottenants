@@ -1,4 +1,4 @@
-.PHONY: up down logs test lint format migrate makemigration seed shell
+.PHONY: up down logs test test-integration lint format migrate makemigration seed shell
 
 up:
 	docker compose up --build
@@ -11,6 +11,9 @@ logs:
 
 test:
 	pytest
+
+test-integration:
+	TEST_DATABASE_URL=$(TEST_DATABASE_URL) pytest -q
 
 lint:
 	ruff check .

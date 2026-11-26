@@ -1,7 +1,16 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
+    Numeric,
+    String,
+    Text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -11,6 +20,20 @@ from app.models.mixins import TimestampMixin
 
 class Booking(TimestampMixin, Base):
     __tablename__ = "bookings"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "service_id"],
+            ["services.tenant_id", "services.id"],
+            ondelete="RESTRICT",
+            name="fk_bookings_tenant_service",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "master_id"],
+            ["masters.tenant_id", "masters.id"],
+            ondelete="SET NULL",
+            name="fk_bookings_tenant_master",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(

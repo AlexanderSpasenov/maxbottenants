@@ -91,6 +91,13 @@ docker compose exec app pytest
 docker compose exec app ruff check .
 ```
 
+Integration-тесты изоляции tenant требуют test DB (имя должно содержать `maxbottenants_test` или `ALLOW_INTEGRATION_DB=1`):
+```bash
+docker compose exec -T -e TEST_DATABASE_URL=postgresql+psycopg://maxbot:maxbot@postgres:5432/maxbottenants_test app pytest -q
+```
+
+CI (`.github/workflows/ci.yml`) поднимает Postgres/Redis service containers, прогоняет `ruff`, `alembic upgrade head`, и `pytest -q` с `TEST_DATABASE_URL`.
+
 Локально (если зависимости установлены):
 ```bash
 pytest
@@ -113,8 +120,10 @@ ruff check .
 1. Каждый законченный этап — отдельный атомарный коммит.
 2. Секреты только в env/secret manager, не в Git.
 3. Любые изменения схемы БД — через Alembic.
-4. Не переходить к следующему инкременту без проверки критериев приёмки.
-5. После задачи фиксировать: что сделано, изменённые файлы, как проверить, риски/ограничения.
+4. Tenant-data запросы только через репозитории/слой, требующий `tenant_id`; не делать прямые cross-tenant запросы.
+5. Не переходить к следующему инкременту без проверки критериев приёмки.
+6. После задачи фиксировать: что сделано, изменённые файлы, как проверить, риски/ограничения.
+7. Перед пилотом: уникальные секреты, webhook secret включён, backup БД, reverse proxy/TLS, ограничение доступа к admin endpoints.
 
 ## Следующий инкремент
 

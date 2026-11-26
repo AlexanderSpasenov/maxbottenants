@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, time
 
-from sqlalchemy import Boolean, Date, ForeignKey, SmallInteger, String, Time
+from sqlalchemy import Boolean, Date, ForeignKey, ForeignKeyConstraint, SmallInteger, String, Time
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -11,6 +11,14 @@ from app.models.mixins import TimestampMixin
 
 class MasterWorkingHours(TimestampMixin, Base):
     __tablename__ = "master_working_hours"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "master_id"],
+            ["masters.tenant_id", "masters.id"],
+            ondelete="CASCADE",
+            name="fk_master_working_hours_tenant_master",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
@@ -27,6 +35,14 @@ class MasterWorkingHours(TimestampMixin, Base):
 
 class ScheduleException(TimestampMixin, Base):
     __tablename__ = "schedule_exceptions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "master_id"],
+            ["masters.tenant_id", "masters.id"],
+            ondelete="CASCADE",
+            name="fk_schedule_exceptions_tenant_master",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(

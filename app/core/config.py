@@ -26,6 +26,17 @@ class Settings(BaseSettings):
     max_webhook_secret: str = ""
     max_webhook_enabled: bool = False
 
+    def validate_runtime(self) -> list[str]:
+        warnings: list[str] = []
+        if self.max_webhook_enabled and not self.max_webhook_secret:
+            warnings.append("MAX_WEBHOOK_ENABLED=true but MAX_WEBHOOK_SECRET is empty")
+        if self.app_env != "development":
+            if self.app_secret_key == "change-me-in-production":
+                warnings.append("APP_SECRET_KEY uses default dev value")
+            if self.admin_api_token == "change-me":
+                warnings.append("ADMIN_API_TOKEN uses default dev value")
+        return warnings
+
     admin_api_token: str = "change-me"
     sync_interval_minutes: int = 15
     worker_poll_interval_seconds: int = 2
