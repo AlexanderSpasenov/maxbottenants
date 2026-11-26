@@ -15,7 +15,10 @@ def live() -> dict[str, str]:
 
 
 @router.get("/health/ready")
-def ready(db: Session = Depends(get_db), settings: Settings = Depends(get_settings)) -> dict[str, str]:
+def ready(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
     db.execute(text("SELECT 1"))
 
     redis_client = Redis.from_url(settings.redis_url, decode_responses=True)

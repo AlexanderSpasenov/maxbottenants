@@ -12,4 +12,7 @@ def verify_max_webhook_secret(x_max_bot_api_secret: str | None = Header(default=
         # Local development before real MAX bot is provisioned.
         return
     if not x_max_bot_api_secret or not hmac.compare_digest(x_max_bot_api_secret, expected):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid webhook secret")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid webhook secret",
+        )
