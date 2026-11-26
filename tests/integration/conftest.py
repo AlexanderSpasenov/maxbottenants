@@ -2,7 +2,7 @@ import os
 
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from app import models  # noqa: F401
 from app.db.base import Base
@@ -42,12 +42,17 @@ def integration_engine():
 @pytest.fixture()
 def db_session(integration_engine) -> Session:
     connection = integration_engine.connect()
-    transaction = connection.begin()
-    session = sessionmaker(bind=connection, expire_on_commit=False, autoflush=False)()
+    outer = connection.begin()
+    session = Session(
+        bind=connection,
+        expire_on_commit=False,
+        autoflush=False,
+        join_transaction_mode="create_savepoint",
+    )
     try:
         yield session
     finally:
         session.close()
-        if transaction.is_active:
-            transaction.rollback()
+        if outer.is_active:
+            outer.rollback()
         connection.close()

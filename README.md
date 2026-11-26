@@ -125,6 +125,14 @@ ruff check .
 6. После задачи фиксировать: что сделано, изменённые файлы, как проверить, риски/ограничения.
 7. Перед пилотом: уникальные секреты, webhook secret включён, backup БД, reverse proxy/TLS, ограничение доступа к admin endpoints.
 
-## Следующий инкремент
+## ���६��� 3 (�१��)
 
-**Инкремент 2**: мультитенантная модель данных, миграции core-таблиц, seed двух тестовых салонов, тесты изоляции tenant.
+Webhook persistence + idempotency + worker dispatch skeleton.
+
+���� �뫮����:
+- /webhook/max �ਭ����� payload � webhook_events, ���᫨��� event_key, �������� ok/duplicate �ଥ�᭮.
+- ��⮬���� dedup ��� redelivery (�த� ���⮪ ��� 楫�� �����⭮�).
+- event_worker ����� pending/failed webhook events � ����砥� �१ ���楱᮪ WebhookEventProcessor (skeleton dispatch).
+- scripts/replay_webhook.py ���室�� ��� ���⮢�� ���ࠢ�� �訡��/payload.
+
+���६��� �� �뫮����: �����-������� �業�� equest_only, Google Sheets sync, online_booking.
