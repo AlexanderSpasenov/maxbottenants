@@ -247,4 +247,13 @@ def test_admin_stats_include_sync_and_dead_outbox_age(db_session, monkeypatch):
     assert body["outbox"]["oldest_dead_at"] is not None
     assert body["sync_logs"]["ok"] == 1
     assert body["sync_logs"]["failed"] == 1
+    # PII/secret safety: audit/log-like summaries must not echo secrets
+    r = client.post(
+        "/admin/sync/stats-a/csv",
+        json={"catalog": {"services": [], "masters": [], "service_masters": []}},
+        headers=headers,
+    )
+    assert r.status_code == 200
+    audit = client.get("/admin/audit?tenant_slug=stats-a&limit=20", headers=headers).json()["audit"]
+    assert not any("test-admin-secret" in str(a.get("request_summary")) for a in audit)
     get_settings.cache_clear()
