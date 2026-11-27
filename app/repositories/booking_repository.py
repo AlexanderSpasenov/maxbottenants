@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.models.booking import Booking
@@ -79,3 +79,46 @@ class BookingRepository:
             Booking.slot_start < end_local,
         )
         return list(self.db.scalars(stmt).all())
+
+    def lock_master(self, tenant_id: uuid.UUID, master_id: uuid.UUID) -> None:
+        # Serialize slot assignment per tenant+master within a transaction.
+        self.db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+            {"k": f"{tenant_id}:{master_id}"},
+        )
+
+    def has_conflicting_booking(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        master_id: uuid.UUID,
+        slot_start,
+        slot_end,
+        exclude_booking_id: uuid.UUID | None = None,
+    ) -> bool:
+        stmt = select(Booking.id).where(
+            Booking.tenant_id == tenant_id,
+            Booking.master_id == master_id,
+            Booking.status.in_(["awaiting_salon", "confirmed", "pending_confirmation"]),
+            Booking.slot_start.is_not(None),
+            Booking.slot_end.is_not(None),
+            Booking.slot_start < slot_end,
+            Booking.slot_end > slot_start,
+        )
+        if exclude_booking_id is not None:
+            stmt = stmt.where(Booking.id != exclude_booking_id)
+        return self.db.scalar(stmt) is not None
+
+    def expire_pending(self, now) -> int:
+        stmt = select(Booking).where(
+            Booking.status == "pending_confirmation",
+            Booking.expires_at.is_not(None),
+            Booking.expires_at <= now,
+        )
+        rows = list(self.db.scalars(stmt).all())
+        for b in rows:
+            b.status = "expired"
+            self.db.add(b)
+        if rows:
+            self.db.flush()
+        return len(rows)

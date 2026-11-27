@@ -446,6 +446,7 @@ class DialogService:
         slot_end = None
         booking_mode = tenant.booking_mode
         status = "awaiting_salon"
+        expires_at = None
         if booking_mode == "online_booking" and ctx.get("slot_start"):
             from datetime import datetime as dt
             from datetime import timedelta
@@ -453,7 +454,31 @@ class DialogService:
             slot_start = dt.fromisoformat(ctx["slot_start"])
             dur = int(ctx.get("duration_snapshot") or 0)
             slot_end = slot_start + timedelta(minutes=dur) if dur else None
-            status = "confirmed"
+            if getattr(tenant, "online_booking_auto_confirm", True):
+                status = "confirmed"
+            else:
+                status = "pending_confirmation"
+                hold = int(getattr(tenant, "online_booking_hold_minutes", 15) or 15)
+                expires_at = datetime.now(UTC) + timedelta(minutes=max(hold, 1))
+        if slot_start and slot_end and ctx.get("master_id"):
+            master_uuid = uuid.UUID(ctx["master_id"])
+            self.bookings.lock_master(tenant.id, master_uuid)
+            conflict = self.bookings.has_conflicting_booking(
+                tenant_id=tenant.id,
+                master_id=master_uuid,
+                slot_start=slot_start,
+                slot_end=slot_end,
+            )
+            if conflict:
+                session.current_step = sm.ENTER_DATE
+                session.context = ctx
+                self.db.add(session)
+                self.db.commit()
+                return [{
+                    "chat_id": chat_id,
+                    "text": "Этот слот уже занят. Выберите другую дату/время.",
+                }]
+
         booking = Booking(
             tenant_id=tenant.id,
             max_user_id=max_user_id,
@@ -470,15 +495,29 @@ class DialogService:
             duration_snapshot=ctx.get("duration_snapshot"),
             customer_name_snapshot=ctx.get("customer_name"),
             customer_phone_encrypted=encrypt_value(phone),
+            expires_at=expires_at,
         )
-        self.bookings.create(booking)
+        try:
+            self.bookings.create(booking)
+        except Exception:
+            self.db.rollback()
+            session.current_step = sm.ENTER_DATE
+            session.context = ctx
+            self.db.add(session)
+            self.db.commit()
+            return [{
+                "chat_id": chat_id,
+                "text": "Не удалось зарезервировать слот. Выберите другой.",
+            }]
         self.customers.upsert(
             tenant_id=tenant.id,
             max_user_id=max_user_id,
             display_name=ctx.get("customer_name"),
             phone_encrypted=encrypt_value(phone),
         )
-        session.current_step = sm.AWAITING_SALON
+        session.current_step = (
+            sm.AWAITING_SALON if status in {"awaiting_salon", "pending_confirmation"} else sm.MENU
+        )
         session.context = {"tenant_slug": tenant.slug, "last_booking_id": str(booking.id)}
         self.db.add(session)
 
@@ -488,6 +527,12 @@ class DialogService:
         if booking.status == "confirmed":
             when = f"{ctx.get('preferred_date')} {ctx.get('preferred_time_range') or ''}".strip()
             client_text = f"Запись #{booking.id} подтверждена. Время: {when}"
+        elif booking.status == "pending_confirmation":
+            when = f"{ctx.get('preferred_date')} {ctx.get('preferred_time_range') or ''}".strip()
+            client_text = (
+                f"Запись #{booking.id} зарезервирована на {when}. "
+                "Ожидает подтверждения салона."
+            )
         else:
             client_text = f"Заявка #{booking.id} создана. Статус: ожидает подтверждения салона."
         client_msg = {"chat_id": chat_id, "text": client_text}
@@ -535,12 +580,17 @@ class DialogService:
             return [{"chat_id": chat_id, "text": "Недостаточно прав."}]
 
         # Atomic status transition for idempotent owner commands.
-        updated = self.bookings.transition_status(
-            tenant_id=booking.tenant_id,
-            booking_id=booking.id,
-            from_status="awaiting_salon",
-            to_status="confirmed" if cmd == "/confirm" else "rejected",
-        )
+        from_statuses = ["awaiting_salon", "pending_confirmation"]
+        updated = None
+        for fs in from_statuses:
+            updated = self.bookings.transition_status(
+                tenant_id=booking.tenant_id,
+                booking_id=booking.id,
+                from_status=fs,
+                to_status="confirmed" if cmd == "/confirm" else "rejected",
+            )
+            if updated is not None:
+                break
         if updated is None:
             self.db.refresh(booking)
             return [{"chat_id": chat_id, "text": f"Заявка уже обработана: {booking.status}"}]

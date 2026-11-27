@@ -5,6 +5,7 @@ import time
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.session import SessionLocal
+from app.repositories.booking_repository import BookingRepository
 from app.repositories.outbox_repository import OutboxRepository
 from app.repositories.webhook_event_repository import WebhookEventRepository
 from app.services.max.sender import send_text
@@ -32,6 +33,21 @@ def process_pending_events(
             except Exception:
                 continue
         return processed
+    finally:
+        if owns_session:
+            db.close()
+
+
+def expire_pending_bookings(db=None) -> int:
+    from datetime import UTC, datetime
+
+    owns_session = db is None
+    db = db or SessionLocal()
+    try:
+        repo = BookingRepository(db)
+        expired = repo.expire_pending(datetime.now(UTC))
+        db.commit()
+        return expired
     finally:
         if owns_session:
             db.close()
@@ -69,6 +85,7 @@ def run() -> None:
     )
     while True:
         try:
+            expired = expire_pending_bookings()
             processed = process_pending_events(
                 batch_size=settings.worker_batch_size,
                 stale_after_seconds=settings.worker_stale_processing_seconds,
@@ -77,8 +94,13 @@ def run() -> None:
                 batch_size=settings.worker_batch_size,
                 max_attempts=settings.outbox_max_attempts,
             )
-            if processed or sent:
-                logger.info("Processed %s webhook events, sent %s outbox messages", processed, sent)
+            if processed or sent or expired:
+                logger.info(
+                    "Processed %s webhook events, sent %s outbox, expired %s bookings",
+                    processed,
+                    sent,
+                    expired,
+                )
         except Exception:
             logger.exception("Worker polling iteration failed")
         time.sleep(settings.worker_poll_interval_seconds)

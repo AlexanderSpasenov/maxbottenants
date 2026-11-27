@@ -106,7 +106,6 @@ def get_available_slots(
                     ):
                         conflict = True
                         break
-                    # request_only without slot_start: no hard block
                 if conflict:
                     continue
 
