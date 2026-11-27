@@ -8,11 +8,11 @@
 
 Все admin endpoints требуют X-Admin-Sync-Secret, если задан ADMIN_SYNC_SECRET.
 
-- POST /admin/sync/{tenant_slug}/csv — синхронизация каталога из CSV/inline catalog. Body: { \"base_dir\": \"...\", \"catalog\": {...}, \"mode\": \"upsert_only|full\" }. По умолчанию upsert_only.
+- POST /admin/sync/{tenant_slug}/csv — синхронизация каталога из CSV/inline catalog. Body: { "base_dir": "...", "catalog": {...}, "mode": "upsert_only|full" }. По умолчанию upsert_only.
 - GET /admin/sync/{tenant_slug}/logs?limit=20 — логи sync.
 - GET /admin/outbox?status=dead&tenant_slug=...&limit=50 — outbox по статусу.
-- POST /admin/outbox/requeue — body: { \"tenant_slug\": \"...\", \"limit\": 100, \"reset_attempts\": false }. Ре-анимирует dead в pending.
-- POST /admin/cleanup — body: { \"dry_run\": true } по умолчанию. Удаляет только старые sent outbox, processed webhook_events, старые sync_log. Не трогает pending/failed/sending/dead.
+- POST /admin/outbox/requeue — body: { "tenant_slug": "...", "limit": 100, "reset_attempts": false }. Ре-анимирует dead в pending.
+- POST /admin/cleanup — body: { "dry_run": true } по умолчанию. Удаляет только старые sent outbox, processed webhook_events, старые sync_log. Не трогает pending/failed/sending/dead.
 - GET /admin/audit?tenant_slug=...&limit=50 — audit log admin-действий. Секреты не логируются.
 - GET /admin/stats?tenant_slug=... — агрегированные outbox/webhook/sync stats, включая oldest_dead_at.
 
