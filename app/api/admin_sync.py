@@ -1,15 +1,15 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.integrations.sheets.csv_source import CsvCatalogSource
+from app.models.outbox import OutboxMessage
 from app.models.sync_log import SyncLog
 from app.models.tenant import Tenant
 from app.repositories.admin_audit_log_repository import AdminAuditLogRepository
@@ -17,7 +17,6 @@ from app.repositories.outbox_repository import OutboxRepository
 from app.services.admin.retention import RetentionService
 from app.services.sync.catalog_sync import CatalogSyncService
 
-logger = logging.getLogger(__name__)
 router = APIRouter(tags=["admin"])
 
 
@@ -125,7 +124,6 @@ async def sync_tenant_csv(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         db.rollback()
-        logger.exception("Admin sync failed tenant=%s", tenant_slug)
         audit.log(
             action="sync.csv",
             status="failed",
@@ -272,7 +270,6 @@ def requeue_outbox_dead(
         db.commit()
     except Exception as exc:
         db.rollback()
-        logger.exception("Admin outbox requeue failed tenant=%s", resolved_slug)
         audit.log(
             action="outbox.requeue",
             status="failed",
@@ -310,7 +307,6 @@ def cleanup_retention(
         db.commit()
     except Exception as exc:
         db.rollback()
-        logger.exception("Admin cleanup failed")
         audit.log(
             action="retention.cleanup",
             status="failed",
@@ -356,24 +352,9 @@ def get_admin_audit(
     }
 
 
-@router.get("/admin/stats")
-def get_admin_stats(
-    tenant_slug: str | None = Query(default=None),
-    db: Session = Depends(get_db),
-    _: None = Depends(require_admin_sync_secret),
-) -> dict[str, Any]:
-    from sqlalchemy import func
-
-    from app.models.outbox import OutboxMessage
-    from app.models.sync_log import SyncLog
+def _build_admin_stats(db: Session, *, tenant_id=None) -> dict[str, Any]:
     from app.repositories.webhook_event_repository import WebhookEventRepository
 
-    tenant_id = None
-    if tenant_slug:
-        tenant = db.query(Tenant).filter(Tenant.slug == tenant_slug).first()
-        if tenant is None:
-            raise HTTPException(status_code=404, detail="Tenant not found")
-        tenant_id = tenant.id
     outbox = OutboxRepository(db).stats(tenant_id=tenant_id)
     webhooks = WebhookEventRepository(db).stats()
 
@@ -393,8 +374,88 @@ def get_admin_stats(
     oldest_dead = db.scalar(oldest_dead_stmt)
 
     return {
-        "tenant_slug": tenant_slug,
         "outbox": {**outbox, "oldest_dead_at": oldest_dead.isoformat() if oldest_dead else None},
         "webhooks": webhooks,
         "sync_logs": sync_logs,
+    }
+
+
+@router.get("/admin/stats")
+def get_admin_stats(
+    tenant_slug: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_sync_secret),
+) -> dict[str, Any]:
+    tenant_id = None
+    if tenant_slug:
+        tenant = db.query(Tenant).filter(Tenant.slug == tenant_slug).first()
+        if tenant is None:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+        tenant_id = tenant.id
+    stats = _build_admin_stats(db, tenant_id=tenant_id)
+    return {"tenant_slug": tenant_slug, **stats}
+
+
+@router.get("/admin/readiness")
+def get_admin_readiness(
+    tenant_slug: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_sync_secret),
+) -> dict[str, Any]:
+    tenant_id = None
+    tenant = None
+    if tenant_slug:
+        tenant = db.query(Tenant).filter(Tenant.slug == tenant_slug).first()
+        if tenant is None:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+        tenant_id = tenant.id
+
+    settings = get_settings()
+    stats = _build_admin_stats(db, tenant_id=tenant_id)
+    dead = int(stats["outbox"].get("dead", 0))
+    failed = int(stats["outbox"].get("failed", 0))
+
+    checks: dict[str, dict[str, Any]] = {
+        "admin_secret_configured": {
+            "ok": bool(settings.admin_sync_secret),
+            "detail": "ADMIN_SYNC_SECRET is set" if settings.admin_sync_secret else "empty",
+        },
+        "admin_ip_allowlist_configured": {
+            "ok": bool((settings.admin_allowed_ips or "").strip()),
+            "detail": "configured" if (settings.admin_allowed_ips or "").strip() else "empty (optional)",
+        },
+        "app_secret_not_default": {
+            "ok": settings.app_secret_key != "change-me-in-production",
+            "detail": "custom" if settings.app_secret_key != "change-me-in-production" else "default",
+        },
+        "outbox_dead_empty": {
+            "ok": dead == 0,
+            "detail": f"dead={dead}, failed={failed}",
+        },
+        "retention_configured": {
+            "ok": settings.retention_sent_outbox_days >= 0
+            and settings.retention_processed_webhook_days >= 0
+            and settings.retention_sync_log_days >= 0,
+            "detail": (
+                f"sent={settings.retention_sent_outbox_days},"
+                f"processed_webhooks={settings.retention_processed_webhook_days},"
+                f"sync_logs={settings.retention_sync_log_days}"
+            ),
+        },
+    }
+    if tenant is not None:
+        checks["tenant_active"] = {
+            "ok": tenant.status == "active",
+            "detail": tenant.status,
+        }
+
+    required_ok = all(
+        checks[k]["ok"]
+        for k in ["admin_secret_configured", "app_secret_not_default", "outbox_dead_empty", "retention_configured"]
+    ) and (checks.get("tenant_active", {"ok": True})["ok"])
+    return {
+        "tenant_slug": tenant_slug,
+        "ready": required_ok,
+        "checks": checks,
+        "stats": stats,
     }

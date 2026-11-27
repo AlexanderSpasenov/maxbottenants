@@ -1,4 +1,4 @@
-# Ops Runbook (MVP)
+﻿# Ops Runbook (MVP)
 
 ## Назначение
 
@@ -6,28 +6,28 @@
 
 ## Admin endpoints
 
-> Дополнительно: можно задать ADMIN_ALLOWED_IPS (comma-separated). Пустое значение = без IP-ограничения.
+Все admin endpoints требуют `X-Admin-Sync-Secret`, если задан `ADMIN_SYNC_SECRET`.
 
-Все admin endpoints требуют X-Admin-Sync-Secret, если задан ADMIN_SYNC_SECRET.
+> Дополнительно: можно задать `ADMIN_ALLOWED_IPS` (comma-separated). Пустое значение = без IP-ограничения.
 
-- POST /admin/sync/{tenant_slug}/csv — синхронизация каталога из CSV/inline catalog. Body: { "base_dir": "...", "catalog": {...}, "mode": "upsert_only|full" }. По умолчанию upsert_only.
-- GET /admin/sync/{tenant_slug}/logs?limit=20 — логи sync.
-- GET /admin/outbox?status=dead&tenant_slug=...&limit=50 — outbox по статусу.
-- POST /admin/outbox/requeue — body: { "tenant_slug": "...", "limit": 100, "reset_attempts": false }. Ре-анимирует dead в pending.
-- POST /admin/cleanup — body: { "dry_run": true } по умолчанию. Удаляет только старые sent outbox, processed webhook_events, старые sync_log. Не трогает pending/failed/sending/dead.
-- GET /admin/audit?tenant_slug=...&limit=50 — audit log admin-действий. Секреты не логируются.
-- GET /admin/stats?tenant_slug=... — агрегированные outbox/webhook/sync stats, включая oldest_dead_at.
+- `POST /admin/sync/{tenant_slug}/csv` — синхронизация каталога из CSV/inline catalog. Body: `{ "base_dir": "...", "catalog": {...}, "mode": "upsert_only|full" }`. По умолчанию `upsert_only`.
+- `GET /admin/sync/{tenant_slug}/logs?limit=20` — логи sync.
+- `GET /admin/outbox?status=dead&tenant_slug=...&limit=50` — outbox по статусу.
+- `POST /admin/outbox/requeue` — body: `{ "tenant_slug": "...", "limit": 100, "reset_attempts": false }`. Ре-анимирует `dead` в `pending`.
+- `POST /admin/cleanup` — body: `{ "dry_run": true }` по умолчанию. Удаляет только старые `sent` outbox, `processed` webhook_events, старые `sync_log`. Не трогает `pending/failed/sending/dead`.
+- `GET /admin/audit?tenant_slug=...&limit=50` — audit log admin-действий. Секреты не логируются.
+- `GET /admin/stats?tenant_slug=...` — агрегированные outbox/webhook/sync stats, включая `oldest_dead_at`.
 
 ## Retention / cleanup
 
 Env:
 
-- RETENTION_SENT_OUTBOX_DAYS=30
-- RETENTION_PROCESSED_WEBHOOK_DAYS=30
-- RETENTION_SYNC_LOG_DAYS=90
-- CLEANUP_INTERVAL_SECONDS=3600
+- `RETENTION_SENT_OUTBOX_DAYS=30`
+- `RETENTION_PROCESSED_WEBHOOK_DAYS=30`
+- `RETENTION_SYNC_LOG_DAYS=90`
+- `CLEANUP_INTERVAL_SECONDS=3600`
 
-Worker периодически запускает cleanup (dry_run=false) с этими настройками. Для ручной проверки используйте POST /admin/cleanup с dry_run=true.
+Worker периодически запускает cleanup (`dry_run=false`) с этими настройками. Для ручной проверки используйте `POST /admin/cleanup` с `dry_run=true`.
 
 ## Backup / restore
 
@@ -44,6 +44,7 @@ Checklist перед пилотом:
 - Учитывать, что PII в `customer_profiles` зашифрована `APP_SECRET_KEY`; потеря ключа делает PII нечитаемой.
 
 Фактический drill (выполнено на сервере 2026-11-27): backup создан в `/opt/maxbottenants/backups`, restore выполнен в `maxbottenants_test`, затем `pytest -q` на test DB прошёл.
+
 ## TLS / reverse proxy
 
 Шаблоны: `docker-compose.proxy.yml` + `deploy/nginx/maxbottenants.conf.example`.
@@ -53,17 +54,19 @@ Checklist перед пилотом:
 - Для MAX webhook нужен публичный HTTPS URL; до реального контракта использовать временный tunnel только для теста.
 - Ограничить размер body, rate limit, IP allowlist/Basic auth для admin endpoints на proxy-уровне до внедрения RBAC.
 - Перед включением профиля proxy проверить cert paths, server_name, allow/deny для `/admin/`.
+
 ## PII policy draft (ограничения MVP)
 
-- PII (customer_profiles) шифруется на уровне приложения через APP_SECRET_KEY.
+- PII (`customer_profiles`) шифруется на уровне приложения через `APP_SECRET_KEY`.
 - Ключевая ротация, retention/deletion по запросу пользователя, legal/compliance процесс — **не реализованы** в MVP, требуется отдельное решение до пилота.
 - Не логировать payload с PII/секретами; admin audit хранит только безопасный summary.
+- До пилота: определить сроки retention PII, процедуру запроса на удаление/экспорт, владельца процесса, и план ротации `APP_SECRET_KEY` (re-encrypt migration).
 
 ## MAX E2E checklist (когда появятся credentials)
 
-- Получить MAX_BOT_TOKEN, MAX_WEBHOOK_SECRET, реальный формат webhook/callback/button payload.
+- Получить `MAX_BOT_TOKEN`, `MAX_WEBHOOK_SECRET`, реальный формат webhook/callback/button payload.
 - Настроить временный HTTPS tunnel и webhook URL.
-- Прогнать E2E на 2 тестовых салонах: /start по deep link, request_only создание заявки, owner confirm/reject, online_booking hold/confirm/expiry, callback buttons.
+- Прогнать E2E на 2 тестовых салонах: `/start` по deep link, request_only создание заявки, owner confirm/reject, online_booking hold/confirm/expiry, callback buttons.
 - Сверить chat/user addressing и rate limits с реальным контрактом; обновить normalizer/adapter и тесты.
 
 ## Ограничения
@@ -80,7 +83,7 @@ Go only if:
 - `ADMIN_SYNC_SECRET` задан, `ADMIN_ALLOWED_IPS` настроен где возможно; `/admin/*` не открыт публично без proxy/auth.
 - Backup создан и restore drill выполнен на `*_test`.
 - Retention настроен, cleanup dry-run проверен, outbox dead-letter мониторится через `/admin/stats`.
-- `.env`/secrets вне git, APP_SECRET_KEY production-grade, PII policy согласована.
+- `.env`/secrets вне git, `APP_SECRET_KEY` production-grade, PII policy согласована.
 
 No-go until external blockers closed:
 - Real MAX credentials/contract/webhook callback/button payload/chat addressing/rate limits + temp HTTPS tunnel + E2E на 2 салонах.
