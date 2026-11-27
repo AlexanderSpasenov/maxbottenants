@@ -422,11 +422,19 @@ def get_admin_readiness(
         },
         "admin_ip_allowlist_configured": {
             "ok": bool((settings.admin_allowed_ips or "").strip()),
-            "detail": "configured" if (settings.admin_allowed_ips or "").strip() else "empty (optional)",
+            "detail": (
+                "configured"
+                if (settings.admin_allowed_ips or "").strip()
+                else "empty (optional)"
+            ),
         },
         "app_secret_not_default": {
             "ok": settings.app_secret_key != "change-me-in-production",
-            "detail": "custom" if settings.app_secret_key != "change-me-in-production" else "default",
+            "detail": (
+                "custom"
+                if settings.app_secret_key != "change-me-in-production"
+                else "default"
+            ),
         },
         "outbox_dead_empty": {
             "ok": dead == 0,
@@ -451,7 +459,12 @@ def get_admin_readiness(
 
     required_ok = all(
         checks[k]["ok"]
-        for k in ["admin_secret_configured", "app_secret_not_default", "outbox_dead_empty", "retention_configured"]
+        for k in [
+            "admin_secret_configured",
+            "app_secret_not_default",
+            "outbox_dead_empty",
+            "retention_configured",
+        ]
     ) and (checks.get("tenant_active", {"ok": True})["ok"])
     return {
         "tenant_slug": tenant_slug,
