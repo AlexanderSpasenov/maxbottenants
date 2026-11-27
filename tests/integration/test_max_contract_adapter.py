@@ -81,3 +81,31 @@ def test_real_message_created_fixture_enqueues_dialog_reply(db_session):
     assert (reply.payload or {}).get("user_id") == 24678000
     atts = (reply.payload or {}).get("attachments") or []
     assert atts and atts[0].get("type") == "inline_keyboard"
+
+
+def test_start_without_slug_returns_menu_for_known_tenant(db_session):
+    tenant = Tenant(slug="salon-a", display_name="Salon A", status="active")
+    db_session.add(tenant)
+    db_session.commit()
+    client = _client_with_db(db_session)
+
+    def send(text, mid):
+        return client.post("/webhook/max", json={
+            "update_type": "message_created",
+            "timestamp": 1,
+            "message": {
+                "mid": mid, "chat_id": 700, "sender": {"user_id": 701, "name": "T"},
+                "body": {"text": text},
+            },
+        })
+
+    assert send("/start salon-a", "m1").status_code == 200
+    process_pending_events(batch_size=50, db=db_session)
+    assert send("/start", "m2").status_code == 200
+    process_pending_events(batch_size=50, db=db_session)
+
+    msgs = db_session.query(OutboxMessage).filter(OutboxMessage.chat_id == 700).order_by(OutboxMessage.scheduled_at.asc()).all()
+    texts = [(m.payload or {}).get("text", "") for m in msgs]
+    assert len(texts) >= 2
+    assert "Выберите действие" in texts[-1]
+    assert (msgs[-1].payload or {}).get("user_id") == 701

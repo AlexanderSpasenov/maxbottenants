@@ -64,8 +64,21 @@ class DialogService:
             session.context = sctx
             self.db.add(session)
 
-        if text.startswith("/start"):
-            return self._handle_start(session, chat_id, max_user_id, text)
+        if text.startswith("/start") or text.lower() in {"/menu", "меню", "start"}:
+            if text.startswith("/start"):
+                return self._handle_start(session, chat_id, max_user_id, text)
+            tenant = self._resolve_tenant(session)
+            if tenant and tenant.status == "active":
+                self.sessions.upsert(
+                    chat_id=chat_id,
+                    max_user_id=max_user_id,
+                    current_tenant_id=tenant.id,
+                    current_step=sm.MENU,
+                    context={"tenant_slug": tenant.slug},
+                )
+                self.db.commit()
+                return [self._menu_message(chat_id, tenant.display_name, max_user_id)]
+            return self._handle_start(session, chat_id, max_user_id, "/start")
 
         owner_response = self._handle_owner_command(chat_id, max_user_id, text)
         if owner_response is not None:
@@ -127,6 +140,19 @@ class DialogService:
                 )
                 self.db.commit()
                 return [self._menu_message(chat_id, tenant.display_name, max_user_id)]
+
+        # /start without token: return to selected salon menu if known.
+        current = self._resolve_tenant(session)
+        if current is not None and current.status == "active":
+            self.sessions.upsert(
+                chat_id=chat_id,
+                max_user_id=max_user_id,
+                current_tenant_id=current.id,
+                current_step=sm.MENU,
+                context={"tenant_slug": current.slug},
+            )
+            self.db.commit()
+            return [self._menu_message(chat_id, current.display_name, max_user_id)]
 
         tenants = self.tenants.list_active()
         if not tenants:
