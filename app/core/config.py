@@ -28,16 +28,21 @@ class Settings(BaseSettings):
     worker_batch_size: int = 100
     worker_stale_processing_seconds: int = 300
     outbox_max_attempts: int = 5
+    admin_sync_secret: str = ""
 
     def validate_runtime(self) -> list[str]:
         warnings: list[str] = []
         if self.max_webhook_enabled and not self.max_webhook_secret:
             warnings.append("MAX_WEBHOOK_ENABLED=true but MAX_WEBHOOK_SECRET is empty")
+        if not self.admin_sync_secret:
+            warnings.append("ADMIN_SYNC_SECRET is empty; admin sync endpoint is unprotected in dev")
         if self.app_env != "development":
             if self.app_secret_key == "change-me-in-production":
                 warnings.append("APP_SECRET_KEY uses default dev value")
             if self.admin_api_token == "change-me":
                 warnings.append("ADMIN_API_TOKEN uses default dev value")
+            if not self.admin_sync_secret:
+                warnings.append("ADMIN_SYNC_SECRET is empty in non-development env")
         return warnings
 
     admin_api_token: str = "change-me"

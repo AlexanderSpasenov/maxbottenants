@@ -61,9 +61,44 @@ def test_csv_catalog_sync_idempotent_and_tenant_scoped(db_session):
     assert db_session.query(Service).filter_by(tenant_id=t2.id).count() == 0
     assert db_session.query(SyncLog).filter_by(tenant_id=t1.id).count() >= 2
 
-    # deactivate missing
+    # upsert_only by default: missing rows are NOT deactivated
     catalog2 = {"services": [], "masters": [], "service_masters": []}
     r = client.post("/admin/sync/salon-sync-a/csv", json={"base_dir": "x", "catalog": catalog2})
     assert r.status_code == 200
     svc = db_session.query(Service).filter_by(tenant_id=t1.id).one()
+    assert svc.is_active is True
+
+    # explicit full mode deactivates missing
+    r = client.post(
+        "/admin/sync/salon-sync-a/csv",
+        json={"base_dir": "x", "catalog": catalog2, "mode": "full"},
+    )
+    assert r.status_code == 200
+    db_session.refresh(svc)
     assert svc.is_active is False
+
+    logs = client.get("/admin/sync/salon-sync-a/logs")
+    assert logs.status_code == 200
+    assert logs.json()["tenant_slug"] == "salon-sync-a"
+    assert len(logs.json()["logs"]) >= 3
+
+
+def test_admin_sync_secret_required_when_configured(db_session, monkeypatch):
+    t1 = Tenant(slug="salon-sync-sec", display_name="A", status="active")
+    db_session.add(t1)
+    db_session.commit()
+    monkeypatch.setenv("ADMIN_SYNC_SECRET", "secret123")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    client = _client_with_db(db_session)
+    payload = {"base_dir": "x", "catalog": {"services": [], "masters": [], "service_masters": []}}
+    r = client.post("/admin/sync/salon-sync-sec/csv", json=payload)
+    assert r.status_code == 401
+    r = client.post(
+        "/admin/sync/salon-sync-sec/csv",
+        json=payload,
+        headers={"X-Admin-Sync-Secret": "secret123"},
+    )
+    assert r.status_code == 200
+    get_settings.cache_clear()

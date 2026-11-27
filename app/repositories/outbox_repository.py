@@ -101,3 +101,12 @@ class OutboxRepository:
             msg.next_attempt_at = datetime.now(UTC) + timedelta(seconds=backoff_seconds)
         self.db.add(msg)
         self.db.commit()
+
+    def list_by_status(
+        self, *, status: str, tenant_id: uuid.UUID | None = None, limit: int = 50
+    ) -> list[OutboxMessage]:
+        stmt = select(OutboxMessage).where(OutboxMessage.status == status)
+        if tenant_id is not None:
+            stmt = stmt.where(OutboxMessage.tenant_id == tenant_id)
+        stmt = stmt.order_by(OutboxMessage.scheduled_at.desc()).limit(limit)
+        return list(self.db.scalars(stmt).all())

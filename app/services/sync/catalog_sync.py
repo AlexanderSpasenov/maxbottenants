@@ -22,6 +22,9 @@ class SyncResult:
     deactivated: int = 0
 
 
+SYNC_MODES = {"full", "upsert_only"}
+
+
 def _as_bool(value: Any, default: bool = True) -> bool:
     if value is None:
         return default
@@ -34,16 +37,20 @@ class CatalogSyncService:
     def __init__(self, db: Session):
         self.db = db
 
-    def sync_tenant_catalog(self, tenant_id: uuid.UUID, catalog: dict[str, Any]) -> SyncLog:
+    def sync_tenant_catalog(
+        self, tenant_id: uuid.UUID, catalog: dict[str, Any], *, mode: str = "upsert_only"
+    ) -> SyncLog:
         tenant = self.db.get(Tenant, tenant_id)
         if tenant is None:
             raise ValueError("Tenant not found")
+        if mode not in SYNC_MODES:
+            raise ValueError(f"Invalid sync mode: {mode}")
 
         log = SyncLog(tenant_id=tenant_id, started_at=datetime.now(UTC), status="running")
         self.db.add(log)
         self.db.flush()
         try:
-            result = self._apply(tenant, catalog)
+            result = self._apply(tenant, catalog, mode=mode)
             log.status = "ok"
             log.services_upserted = result.services_upserted
             log.masters_upserted = result.masters_upserted
@@ -74,13 +81,25 @@ class CatalogSyncService:
             self.db.refresh(fail)
             return fail
 
-    def _apply(self, tenant: Tenant, catalog: dict[str, Any]) -> SyncResult:
+    def _apply(self, tenant: Tenant, catalog: dict[str, Any], *, mode: str) -> SyncResult:
         res = SyncResult()
         services_in = catalog.get("services") or []
         masters_in = catalog.get("masters") or []
         links_in = catalog.get("service_masters") or []
         hours_in = catalog.get("master_working_hours") or []
         exceptions_in = catalog.get("schedule_exceptions") or []
+        for name, rows in [
+            ("services", services_in),
+            ("masters", masters_in),
+            ("service_masters", links_in),
+            ("master_working_hours", hours_in),
+            ("schedule_exceptions", exceptions_in),
+        ]:
+            if not isinstance(rows, list):
+                raise ValueError(f"{name} must be a list")
+            for i, row in enumerate(rows):
+                if not isinstance(row, dict):
+                    raise ValueError(f"{name}[{i}] must be an object")
 
         service_map: dict[str, Service] = {}
         seen_services: set[str] = set()
@@ -160,24 +179,25 @@ class CatalogSyncService:
             link.is_active = _as_bool(row.get("is_active"), True)
             self.db.add(link)
 
-        # deactivate missing
-        for svc in self.db.scalars(select(Service).where(Service.tenant_id == tenant.id)):
-            if svc.external_key not in seen_services and svc.is_active:
-                svc.is_active = False
-                self.db.add(svc)
-                res.deactivated += 1
-        for m in self.db.scalars(select(Master).where(Master.tenant_id == tenant.id)):
-            if m.external_key not in seen_masters and m.is_active:
-                m.is_active = False
-                self.db.add(m)
-                res.deactivated += 1
-        for link in self.db.scalars(
-            select(ServiceMaster).where(ServiceMaster.tenant_id == tenant.id)
-        ):
-            if (link.service_id, link.master_id) not in seen_links and link.is_active:
-                link.is_active = False
-                self.db.add(link)
-                res.deactivated += 1
+        # deactivate missing only in explicit full snapshot mode
+        if mode == "full":
+            for svc in self.db.scalars(select(Service).where(Service.tenant_id == tenant.id)):
+                if svc.external_key not in seen_services and svc.is_active:
+                    svc.is_active = False
+                    self.db.add(svc)
+                    res.deactivated += 1
+            for m in self.db.scalars(select(Master).where(Master.tenant_id == tenant.id)):
+                if m.external_key not in seen_masters and m.is_active:
+                    m.is_active = False
+                    self.db.add(m)
+                    res.deactivated += 1
+            for link in self.db.scalars(
+                select(ServiceMaster).where(ServiceMaster.tenant_id == tenant.id)
+            ):
+                if (link.service_id, link.master_id) not in seen_links and link.is_active:
+                    link.is_active = False
+                    self.db.add(link)
+                    res.deactivated += 1
 
         # Replace schedule rows for simplicity/idempotency (tenant-scoped)
         for row in self.db.scalars(
