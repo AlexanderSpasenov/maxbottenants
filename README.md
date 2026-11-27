@@ -42,14 +42,17 @@ docker compose exec -T -e TEST_DATABASE_URL=postgresql+psycopg://maxbot:maxbot@p
 
 ## Admin endpoints
 
-Все admin endpoints требуют заголовок `X-Admin-Sync-Secret`, если `ADMIN_SYNC_SECRET` задан.
+Все admin endpoints требуют X-Admin-Sync-Secret, если задан ADMIN_SYNC_SECRET.
 
-- `POST /admin/sync/{tenant_slug}/csv` — body: `{ "base_dir": "...", "catalog": {...}, "mode": "upsert_only|full" }`
-- `GET /admin/sync/{tenant_slug}/logs?limit=20`
-- `GET /admin/outbox?status=dead&tenant_slug=...&limit=50`
-- `POST /admin/outbox/requeue` — body: `{ "tenant_slug": "...", "limit": 100, "reset_attempts": false }`
-- `GET /admin/stats?tenant_slug=...`
+- POST /admin/sync/{tenant_slug}/csv - body: { "base_dir": "...", "catalog": {...}, "mode": "upsert_only|full" }
+- GET /admin/sync/{tenant_slug}/logs?limit=20
+- GET /admin/outbox?status=dead&tenant_slug=...&limit=50
+- POST /admin/outbox/requeue - body: { "tenant_slug": "...", "limit": 100, "reset_attempts": false }
+- POST /admin/cleanup - body: { "dry_run": true } (по умолчанию dry-run; удаляет только старые sent outbox/processed webhooks/sync logs)
+- GET /admin/audit?tenant_slug=...&limit=50
+- GET /admin/stats?tenant_slug=...
 
+Подробности: docs/ops-runbook.md.
 ## Важные env
 
 См. `.env.example`. Ключевые:
@@ -59,22 +62,33 @@ docker compose exec -T -e TEST_DATABASE_URL=postgresql+psycopg://maxbot:maxbot@p
 - `MAX_WEBHOOK_SECRET`, `MAX_BOT_TOKEN` — для реального MAX
 - `ADMIN_SYNC_SECRET` — секрет для admin endpoints
 - `OUTBOX_MAX_ATTEMPTS`, `WORKER_BATCH_SIZE`, `WORKER_POLL_INTERVAL_SECONDS`
+## Важные env
+
+См. `.env.example`. Ключевые:
+
+- `DATABASE_URL_SYNC`, `REDIS_URL`
+- `APP_SECRET_KEY` - обязателен для production; используется для шифрования PII
+- `MAX_WEBHOOK_SECRET`, `MAX_BOT_TOKEN` - для реального MAX
+- `ADMIN_SYNC_SECRET` - секрет для admin endpoints
+- `OUTBOX_MAX_ATTEMPTS`, `WORKER_BATCH_SIZE`, `WORKER_POLL_INTERVAL_SECONDS`
+- `RETENTION_SENT_OUTBOX_DAYS`, `RETENTION_PROCESSED_WEBHOOK_DAYS`, `RETENTION_SYNC_LOG_DAYS`, `CLEANUP_INTERVAL_SECONDS`
 
 ## Ограничения / риски
 
 - Нет реального MAX contract/E2E (нужны token/webhook secret/callback payload/chat addressing/rate limits, temp HTTPS tunnel).
-- Tenant isolation на уровне схемы/репозиториев, не Postgres RLS.
-- PII key rotation/retention/deletion policy до пилота не финализирована.
-- Admin auth простой shared-secret; нужен audit/RBAC/allowlist для пилота.
-- Google Sheets реальный API не подключён; есть CSV/fixture skeleton.
-- Нет полноценного monitoring/alerting/backup/TLS/reverse proxy runbook для прод.
+- Tenant isolation на уровне схемы/репозиториев/тестов, не Postgres RLS.
+- PII key rotation/retention/deletion policy не финализированы.
+- Admin auth — shared secret; нужен audit/RBAC/allowlist для пилота.
+- Google Sheets реальный API не подключен; есть CSV/fixture skeleton.
+- Нет полноценного monitoring/alerting/backup/TLS/reverse proxy runbook в прод-инфре; см. `docs/ops-runbook.md`.
 
 ## Структура
 
-- `app/api` — FastAPI endpoints
-- `app/models` — SQLAlchemy models
-- `app/repositories` — tenant-scoped data access
-- `app/services` — dialog/webhook/sync/scheduling/max
-- `app/workers` — webhook/outbox/expiry worker
-- `app/db/migrations` — Alembic migrations
-- `tests` — unit/integration tests
+- `app/api` - FastAPI endpoints
+- `app/models` - SQLAlchemy models
+- `app/repositories` - tenant-scoped data access
+- `app/services` - dialog/webhook/sync/scheduling/max/admin
+- `app/workers` - webhook/outbox/expiry/retention worker
+- `app/db/migrations` - Alembic migrations
+- `docs` - ops/runbook docs
+- `tests` - unit/integration tests
