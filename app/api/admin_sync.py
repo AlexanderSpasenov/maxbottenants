@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -21,13 +21,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["admin"])
 
 
-def require_admin_sync_secret(x_admin_sync_secret: str | None = Header(default=None)) -> None:
+def require_admin_sync_secret(
+    request: Request, x_admin_sync_secret: str | None = Header(default=None)
+) -> None:
     settings = get_settings()
     expected = settings.admin_sync_secret
     if not expected:
-        return  # dev mode allowed, warned by config validation
-    if not x_admin_sync_secret or x_admin_sync_secret != expected:
+        pass  # dev mode allowed, warned by config validation
+    elif not x_admin_sync_secret or x_admin_sync_secret != expected:
         raise HTTPException(status_code=401, detail="Invalid admin sync secret")
+
+    allowed_raw = (settings.admin_allowed_ips or "").strip()
+    if allowed_raw:
+        allowed = {ip.strip() for ip in allowed_raw.split(",") if ip.strip()}
+        client_ip = (request.client.host if request.client else "") or ""
+        if client_ip not in allowed:
+            raise HTTPException(status_code=403, detail="Admin IP not allowed")
 
 
 def _safe_sync_summary(payload: dict[str, Any]) -> dict[str, Any]:

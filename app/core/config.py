@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     worker_batch_size: int = 100
     worker_stale_processing_seconds: int = 300
     outbox_max_attempts: int = 5
-    admin_sync_secret: str = ""
+    admin_sync_secret: str = ""`r`n    admin_allowed_ips: str = ""  # comma-separated; empty means no IP restriction
     retention_sent_outbox_days: int = 30
     retention_processed_webhook_days: int = 30
     retention_sync_log_days: int = 90
