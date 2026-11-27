@@ -25,6 +25,7 @@ def _audit_actor(principal: AdminPrincipal | None) -> dict[str, Any] | None:
         "role": principal.role,
         "auth_mode": principal.auth_mode,
     }
+
 from app.services.admin.retention import RetentionService
 from app.services.sync.catalog_sync import CatalogSyncService
 
