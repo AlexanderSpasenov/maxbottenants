@@ -197,8 +197,19 @@ class DialogService:
             return self._choose_service(session, tenant, chat_id, text, ctx)
         if step == sm.CHOOSE_MASTER:
             return self._choose_master(session, tenant, chat_id, text, ctx)
+        if step == sm.CHOOSE_SLOT:
+            return self._choose_slot(session, tenant, chat_id, max_user_id, text, ctx)
         if step == sm.ENTER_DATE:
-            ctx["preferred_date"] = text
+            normalized = self._normalize_date(text)
+            if not normalized:
+                self.db.commit()
+                return [{
+                    "chat_id": chat_id,
+                    "text": "Неверная дата. Формат YYYY-MM-DD, не в прошлом.",
+                }]
+            ctx["preferred_date"] = normalized
+            if tenant.booking_mode == "online_booking":
+                return self._show_slots(session, tenant, chat_id, ctx)
             session.current_step = sm.ENTER_TIME
             session.context = ctx
             self.db.add(session)
@@ -338,8 +349,84 @@ class DialogService:
         session.context = ctx
         self.db.add(session)
         self.db.commit()
+        if tenant.booking_mode == "online_booking" and not ctx.get("master_id"):
+            return [{
+                "chat_id": chat_id,
+                "text": "Для online_booking выберите конкретного мастера.",
+            }]
         return [{"chat_id": chat_id, "text": "Укажите дату (например 2026-11-30)."}]
 
+    def _show_slots(self, session, tenant, chat_id: int, ctx: dict):
+        from datetime import date as date_type
+
+        from app.services.scheduling.slots import get_available_slots
+
+        master_id = uuid.UUID(ctx["master_id"]) if ctx.get("master_id") else None
+        if master_id is None:
+            self.db.commit()
+            return [{
+                "chat_id": chat_id,
+                "text": "Для online_booking выберите конкретного мастера.",
+            }]
+        service = self.catalog.get_service(tenant.id, uuid.UUID(ctx["service_id"]))
+        if service is None:
+            self.db.commit()
+            return [{"chat_id": chat_id, "text": "Услуга не найдена. /start"}]
+        try:
+            pref_day = date_type.fromisoformat(ctx["preferred_date"])
+        except Exception:
+            self.db.commit()
+            return [{"chat_id": chat_id, "text": "Неверная дата."}]
+        slots = get_available_slots(
+            db=self.db,
+            tenant_id=tenant.id,
+            master_id=master_id,
+            service_duration_minutes=service.duration_minutes,
+            buffer_minutes=service.buffer_minutes or 0,
+            tenant_tz=tenant.timezone,
+            days_ahead=1,
+        )
+        tz = __import__("zoneinfo").ZoneInfo(tenant.timezone)
+        slots = [
+            s for s in slots if s.start.astimezone(tz).date() == pref_day
+        ][:10]
+        if not slots:
+            self.db.commit()
+            return [{
+                "chat_id": chat_id,
+                "text": "Нет свободных слотов на эту дату. Введите другую дату YYYY-MM-DD.",
+            }]
+        ctx["slots"] = [s.start.isoformat() for s in slots]
+        session.current_step = sm.CHOOSE_SLOT
+        session.context = ctx
+        self.db.add(session)
+        self.db.commit()
+        lines = ["Выберите слот:"]
+        for i, s in enumerate(slots, start=1):
+            local = s.start.astimezone(tz)
+            lines.append(f"{i}. {local.strftime('%Y-%m-%d %H:%M')}")
+        lines.append("Отправьте номер слота.")
+        return [{"chat_id": chat_id, "text": "\n".join(lines)}]
+    def _choose_slot(self, session, tenant, chat_id: int, max_user_id: int, text: str, ctx: dict):
+        slots = ctx.get("slots") or []
+        if not text.isdigit():
+            self.db.commit()
+            return [{"chat_id": chat_id, "text": "Отправьте номер слота."}]
+        idx = int(text) - 1
+        if idx < 0 or idx >= len(slots):
+            self.db.commit()
+            return [{"chat_id": chat_id, "text": "Неверный номер слота."}]
+        ctx["slot_start"] = slots[idx]
+        tz = __import__('zoneinfo').ZoneInfo(tenant.timezone)
+        local_dt = __import__('datetime').datetime.fromisoformat(slots[idx])
+        local = local_dt.astimezone(tz)
+        ctx["preferred_time_range"] = local.strftime("%H:%M")
+        ctx["slot_start_local"] = local.strftime("%H:%M")
+        session.current_step = sm.ENTER_NAME
+        session.context = ctx
+        self.db.add(session)
+        self.db.commit()
+        return [{"chat_id": chat_id, "text": "Как вас зовут?"}]
     def _confirm_message(self, chat_id: int, ctx: dict[str, Any]) -> dict[str, Any]:
         text = (
             "Проверьте заявку:\n"
@@ -355,16 +442,30 @@ class DialogService:
 
     def _create_booking(self, session, tenant, chat_id: int, max_user_id: int, ctx: dict):
         phone = str(ctx.get("customer_phone") or "")
+        slot_start = None
+        slot_end = None
+        booking_mode = tenant.booking_mode
+        status = "awaiting_salon"
+        if booking_mode == "online_booking" and ctx.get("slot_start"):
+            from datetime import datetime as dt
+            from datetime import timedelta
+
+            slot_start = dt.fromisoformat(ctx["slot_start"])
+            dur = int(ctx.get("duration_snapshot") or 0)
+            slot_end = slot_start + timedelta(minutes=dur) if dur else None
+            status = "confirmed"
         booking = Booking(
             tenant_id=tenant.id,
             max_user_id=max_user_id,
             chat_id=chat_id,
             service_id=uuid.UUID(ctx["service_id"]),
             master_id=uuid.UUID(ctx["master_id"]) if ctx.get("master_id") else None,
+            slot_start=slot_start,
+            slot_end=slot_end,
             preferred_date=ctx.get("preferred_date"),
-            preferred_time_range=ctx.get("preferred_time_range"),
-            status="awaiting_salon",
-            booking_mode="request_only",
+            preferred_time_range=ctx.get("preferred_time_range") or ctx.get("slot_start_local"),
+            status=status,
+            booking_mode=booking_mode,
             price_snapshot=ctx.get("price_snapshot"),
             duration_snapshot=ctx.get("duration_snapshot"),
             customer_name_snapshot=ctx.get("customer_name"),
@@ -384,10 +485,12 @@ class DialogService:
         owner_msgs = self._notify_owners(tenant.id, booking, ctx)
         self.db.commit()
 
-        client_msg = {
-            "chat_id": chat_id,
-            "text": f"Заявка #{booking.id} создана. Статус: ожидает подтверждения салона.",
-        }
+        if booking.status == "confirmed":
+            when = f"{ctx.get('preferred_date')} {ctx.get('preferred_time_range') or ''}".strip()
+            client_text = f"Запись #{booking.id} подтверждена. Время: {when}"
+        else:
+            client_text = f"Заявка #{booking.id} создана. Статус: ожидает подтверждения салона."
+        client_msg = {"chat_id": chat_id, "text": client_text}
         return [client_msg, *owner_msgs]
 
     def _notify_owners(self, tenant_id: uuid.UUID, booking: Booking, ctx: dict):

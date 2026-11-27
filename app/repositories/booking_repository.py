@@ -62,3 +62,20 @@ class BookingRepository:
             .order_by(Booking.created_at.desc())
         )
         return list(self.db.scalars(stmt).all())
+
+    def list_master_bookings_for_day(
+        self, tenant_id: uuid.UUID, master_id: uuid.UUID, day, tz
+    ) -> list[Booking]:
+        from datetime import datetime, time, timedelta
+
+        start_local = datetime.combine(day, time.min, tzinfo=tz)
+        end_local = start_local + timedelta(days=1)
+        stmt = select(Booking).where(
+            Booking.tenant_id == tenant_id,
+            Booking.master_id == master_id,
+            Booking.status.in_(["awaiting_salon", "confirmed", "pending_confirmation"]),
+            Booking.slot_start.is_not(None),
+            Booking.slot_start >= start_local,
+            Booking.slot_start < end_local,
+        )
+        return list(self.db.scalars(stmt).all())
