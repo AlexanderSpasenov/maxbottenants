@@ -50,7 +50,7 @@ def test_admin_audit_log_for_sync_and_requeue(db_session, monkeypatch):
     assert r.status_code == 200
 
     logs = db_session.query(AdminAuditLog).order_by(AdminAuditLog.created_at.asc()).all()
-    actions = [l.action for l in logs]
+    actions = [log_row.action for log_row in logs]
     assert "sync.csv" in actions
     assert "outbox.requeue" in actions
     for log_row in logs:
