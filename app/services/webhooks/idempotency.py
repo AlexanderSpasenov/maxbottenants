@@ -16,23 +16,17 @@ def _extract_callback(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_event_key(payload: dict[str, Any]) -> str:
-    update_type = str(payload.get("update_type") or "unknown")
-    msg = _extract_message(payload)
-    callback = _extract_callback(payload)
+    from app.services.webhooks.normalizer import normalize_max_event
 
-    body = msg.get("body") if isinstance(msg.get("body"), dict) else {}
-    sender = msg.get("sender") if isinstance(msg.get("sender"), dict) else {}
-    recipient = msg.get("recipient") if isinstance(msg.get("recipient"), dict) else {}
+    n = normalize_max_event(payload)
+    update_type = str(n.get("event_type") or "unknown")
 
     candidates = [
         payload.get("event_id"),
         payload.get("update_id"),
         payload.get("event_key"),
-        msg.get("mid"),
-        body.get("mid"),
-        msg.get("id"),
-        callback.get("callback_id"),
-        callback.get("id"),
+        n.get("message_id"),
+        n.get("callback_id"),
     ]
     for value in candidates:
         if value is not None and str(value).strip():
@@ -40,11 +34,11 @@ def build_event_key(payload: dict[str, Any]) -> str:
 
     fingerprint = {
         "update_type": update_type,
-        "timestamp": payload.get("timestamp"),
-        "chat_id": msg.get("chat_id") or recipient.get("chat_id") or callback.get("chat_id"),
-        "user_id": sender.get("user_id") or callback.get("user_id"),
-        "text": body.get("text"),
-        "payload": callback.get("payload"),
+        "timestamp": n.get("timestamp"),
+        "chat_id": n.get("chat_id"),
+        "user_id": n.get("user_id"),
+        "text": n.get("text"),
+        "payload": n.get("callback_payload"),
     }
     raw = json.dumps(fingerprint, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()

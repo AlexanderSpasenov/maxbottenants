@@ -43,13 +43,12 @@ class DialogService:
         return []
 
     def _handle_message(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
-        msg = payload.get("message") if isinstance(payload.get("message"), dict) else {}
-        sender = msg.get("sender") if isinstance(msg.get("sender"), dict) else {}
-        recipient = msg.get("recipient") if isinstance(msg.get("recipient"), dict) else {}
-        body = msg.get("body") if isinstance(msg.get("body"), dict) else {}
-        chat_id = int(msg.get("chat_id") or recipient.get("chat_id") or 0)
-        max_user_id = int(sender.get("user_id") or 0)
-        text = str(body.get("text") or "").strip()
+        from app.services.webhooks.normalizer import normalize_max_event
+
+        n = normalize_max_event(payload)
+        chat_id = int(n.get("chat_id") or 0)
+        max_user_id = int(n.get("user_id") or 0)
+        text = str(n.get("text") or "").strip()
         if not chat_id or not max_user_id:
             return []
 
@@ -624,14 +623,35 @@ class DialogService:
         return None
 
     def _handle_callback(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
-        # Safe default: callbacks are not trusted/routed until real MAX contract is confirmed.
-        callback = payload.get("callback") if isinstance(payload.get("callback"), dict) else {}
-        logger.info(
-            "Callback ignored (contract not confirmed): update_type=%s callback_id=%s",
-            payload.get("update_type"),
-            callback.get("callback_id") or callback.get("id"),
-        )
-        return []
+        """Contract-agnostic callback adapter.
+
+        MAX callback contract is not fully confirmed; we only route safe text-like
+        payloads through the existing text flow. Unknown callbacks are ignored.
+        """
+        from app.services.webhooks.normalizer import normalize_max_event
+
+        n = normalize_max_event(payload)
+        callback_id = n.get("callback_id")
+        text = str(n.get("text") or "").strip()
+        if not n.get("chat_id") or not n.get("user_id") or not text:
+            logger.info(
+                "Callback ignored (missing route data): update_type=%s callback_id=%s",
+                n.get("event_type"),
+                callback_id,
+            )
+            return []
+
+        # Reuse message flow by presenting normalized text.
+        synthetic = {
+            "update_type": "message_created",
+            "message": {
+                "chat_id": n.get("chat_id"),
+                "sender": {"user_id": n.get("user_id"), "name": n.get("sender_name")},
+                "body": {"text": text},
+            },
+        }
+        logger.info("Callback routed as text: callback_id=%s text=%s", callback_id, text[:80])
+        return self._handle_message(synthetic)
 
     @staticmethod
     def _normalize_date(value: str) -> str | None:
