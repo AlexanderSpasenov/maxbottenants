@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import uuid
 
 from sqlalchemy import select
@@ -18,6 +20,15 @@ class BookingRepository:
     def get(self, tenant_id: uuid.UUID, booking_id: uuid.UUID) -> Booking | None:
         stmt = select(Booking).where(Booking.tenant_id == tenant_id, Booking.id == booking_id)
         return self.db.scalar(stmt)
+
+    def get_by_id(self, booking_id: uuid.UUID) -> Booking | None:
+        return self.db.get(Booking, booking_id)
+
+    def update_status(self, booking: Booking, status: str) -> Booking:
+        booking.status = status
+        self.db.add(booking)
+        self.db.flush()
+        return booking
 
     def list_for_user(self, tenant_id: uuid.UUID, max_user_id: int) -> list[Booking]:
         stmt = (

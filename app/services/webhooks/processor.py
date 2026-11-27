@@ -6,20 +6,18 @@ from sqlalchemy.orm import Session
 
 from app.models.webhook import WebhookEvent
 from app.repositories.webhook_event_repository import WebhookEventRepository
+from app.services.dialogs.service import DialogService
 
 logger = logging.getLogger(__name__)
 
 
 class WebhookEventProcessor:
-    """Increment 3: minimal dispatch skeleton.
-
-    It marks events as processed and logs them. Business routing (request_only flow)
-    is implemented in next increments.
-    """
+    """Routes webhook events to dialog/booking services."""
 
     def __init__(self, db: Session):
         self.db = db
         self.repo = WebhookEventRepository(db)
+        self.dialogs = DialogService(db)
 
     def process(self, event: WebhookEvent) -> None:
         try:
@@ -30,7 +28,9 @@ class WebhookEventProcessor:
                 event.event_type,
                 event.attempts,
             )
-            # TODO Increment 4+: route by event_type/payload into dialog/booking services.
+            responses = self.dialogs.handle_event(event.payload or {})
+            for resp in responses:
+                logger.info("Dialog response: %s", resp)
             self.repo.mark_processed(event)
         except Exception as exc:
             logger.exception("Webhook event processing failed: %s", event.event_key)

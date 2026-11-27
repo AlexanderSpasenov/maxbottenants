@@ -1,0 +1,416 @@
+from __future__ import annotations
+
+import logging
+import uuid
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from app.models.booking import Booking
+from app.repositories.booking_repository import BookingRepository
+from app.repositories.catalog_repository import CatalogRepository
+from app.repositories.customer_profile_repository import CustomerProfileRepository
+from app.repositories.dialog_session_repository import DialogSessionRepository
+from app.repositories.outbox_repository import OutboxRepository
+from app.repositories.tenant_link_repository import TenantLinkRepository
+from app.repositories.tenant_member_repository import TenantMemberRepository
+from app.repositories.tenant_repository import TenantRepository
+from app.services.dialogs import state_machine as sm
+
+logger = logging.getLogger(__name__)
+
+
+class DialogService:
+    def __init__(self, db: Session):
+        self.db = db
+        self.tenants = TenantRepository(db)
+        self.links = TenantLinkRepository(db)
+        self.members = TenantMemberRepository(db)
+        self.sessions = DialogSessionRepository(db)
+        self.catalog = CatalogRepository(db)
+        self.bookings = BookingRepository(db)
+        self.customers = CustomerProfileRepository(db)
+        self.outbox = OutboxRepository(db)
+
+    def handle_event(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        event_type = str(payload.get("update_type") or "unknown")
+        if event_type == "message_created":
+            return self._handle_message(payload)
+        if event_type == "message_callback":
+            return self._handle_callback(payload)
+        return []
+
+    def _handle_message(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        msg = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        sender = msg.get("sender") if isinstance(msg.get("sender"), dict) else {}
+        recipient = msg.get("recipient") if isinstance(msg.get("recipient"), dict) else {}
+        body = msg.get("body") if isinstance(msg.get("body"), dict) else {}
+        chat_id = int(msg.get("chat_id") or recipient.get("chat_id") or 0)
+        max_user_id = int(sender.get("user_id") or 0)
+        text = str(body.get("text") or "").strip()
+        if not chat_id or not max_user_id:
+            return []
+
+        session = self.sessions.get(chat_id)
+        if session is None:
+            session = self.sessions.upsert(
+                chat_id=chat_id, max_user_id=max_user_id, current_step=sm.START, context={}
+            )
+
+        if text.startswith("/start"):
+            return self._handle_start(session, chat_id, max_user_id, text)
+
+        owner_response = self._handle_owner_command(chat_id, max_user_id, text)
+        if owner_response is not None:
+            self.db.commit()
+            return owner_response
+
+        return self._handle_text_step(session, chat_id, max_user_id, text)
+
+    def _handle_start(self, session, chat_id: int, max_user_id: int, text: str):
+        parts = text.split(maxsplit=1)
+        token = parts[1].strip() if len(parts) > 1 else ""
+        if token:
+            link = self.links.get_by_token(token)
+            if link and link.link_type == "client" and link.tenant:
+                tenant = link.tenant
+                self.customers.upsert(tenant_id=tenant.id, max_user_id=max_user_id)
+                self.sessions.upsert(
+                    chat_id=chat_id,
+                    max_user_id=max_user_id,
+                    current_tenant_id=tenant.id,
+                    current_step=sm.MENU,
+                    context={"tenant_slug": tenant.slug},
+                )
+                self.db.commit()
+                return [self._menu_message(chat_id, tenant.display_name)]
+
+        tenants = self.tenants.list_active()
+        if not tenants:
+            self.db.commit()
+            return [{"chat_id": chat_id, "text": "Сейчас нет доступных салонов."}]
+        if len(tenants) == 1:
+            tenant = tenants[0]
+            self.customers.upsert(tenant_id=tenant.id, max_user_id=max_user_id)
+            self.sessions.upsert(
+                chat_id=chat_id,
+                max_user_id=max_user_id,
+                current_tenant_id=tenant.id,
+                current_step=sm.MENU,
+                context={"tenant_slug": tenant.slug},
+            )
+            self.db.commit()
+            return [self._menu_message(chat_id, tenant.display_name)]
+
+        session.current_step = sm.CHOOSE_TENANT
+        session.context = {}
+        self.db.add(session)
+        self.db.commit()
+        lines = ["Выберите салон:"]
+        for i, t in enumerate(tenants, start=1):
+            lines.append(f"{i}. {t.display_name} (/start {t.slug})")
+        lines.append("Отправьте номер или /start <slug>.")
+        return [{"chat_id": chat_id, "text": "\n".join(lines)}]
+
+    def _menu_message(self, chat_id: int, tenant_name: str) -> dict[str, Any]:
+        return {
+            "chat_id": chat_id,
+            "text": (
+                f"Салон: {tenant_name}\n"
+                "Меню:\n1. Записаться\n2. Мои заявки\n\nОтправьте 1 или 2."
+            ),
+        }
+
+    def _handle_text_step(self, session, chat_id: int, max_user_id: int, text: str):
+        step = session.current_step or sm.START
+        ctx = dict(session.context or {})
+
+        if step == sm.CHOOSE_TENANT:
+            return self._choose_tenant(session, chat_id, max_user_id, text)
+
+        tenant = self._resolve_tenant(session)
+        if tenant is None:
+            session.current_step = sm.START
+            session.context = {}
+            self.db.add(session)
+            self.db.commit()
+            return [{"chat_id": chat_id, "text": "Сессия устарела. /start"}]
+
+        if step == sm.MENU:
+            if text == "1":
+                services = self.catalog.list_active_services(tenant.id)
+                if not services:
+                    self.db.commit()
+                    return [{"chat_id": chat_id, "text": "В салоне пока нет активных услуг."}]
+                ctx = {"tenant_slug": tenant.slug, "services": [str(s.id) for s in services]}
+                session.current_step = sm.CHOOSE_SERVICE
+                session.context = ctx
+                self.db.add(session)
+                self.db.commit()
+                lines = ["Выберите услугу:"]
+                for i, s in enumerate(services, start=1):
+                    lines.append(f"{i}. {s.name} - {s.price}, {s.duration_minutes}m")
+                lines.append("Отправьте номер услуги.")
+                return [{"chat_id": chat_id, "text": "\n".join(lines)}]
+            if text == "2":
+                bookings = self.bookings.list_for_user(tenant.id, max_user_id)
+                if not bookings:
+                    self.db.commit()
+                    return [{"chat_id": chat_id, "text": "У вас пока нет заявок."}]
+                lines = ["Ваши заявки:"]
+                for b in bookings[:10]:
+                    date = b.preferred_date or "-"
+                    tr = b.preferred_time_range or ""
+                    lines.append(f"- {b.id} | {b.status} | {date} {tr}")
+                self.db.commit()
+                return [{"chat_id": chat_id, "text": "\n".join(lines)}]
+            self.db.commit()
+            return [self._menu_message(chat_id, tenant.display_name)]
+
+        if step == sm.CHOOSE_SERVICE:
+            return self._choose_service(session, tenant, chat_id, text, ctx)
+        if step == sm.CHOOSE_MASTER:
+            return self._choose_master(session, tenant, chat_id, text, ctx)
+        if step == sm.ENTER_DATE:
+            ctx["preferred_date"] = text
+            session.current_step = sm.ENTER_TIME
+            session.context = ctx
+            self.db.add(session)
+            self.db.commit()
+            return [{"chat_id": chat_id, "text": "Укажите время (например 15:00-17:00)."}]
+        if step == sm.ENTER_TIME:
+            ctx["preferred_time_range"] = text
+            session.current_step = sm.ENTER_NAME
+            session.context = ctx
+            self.db.add(session)
+            self.db.commit()
+            return [{"chat_id": chat_id, "text": "Как вас зовут?"}]
+        if step == sm.ENTER_NAME:
+            ctx["customer_name"] = text
+            session.current_step = sm.ENTER_PHONE
+            session.context = ctx
+            self.db.add(session)
+            self.db.commit()
+            return [{"chat_id": chat_id, "text": "Введите телефон для связи."}]
+        if step == sm.ENTER_PHONE:
+            ctx["customer_phone"] = text
+            session.current_step = sm.CONFIRM
+            session.context = ctx
+            self.db.add(session)
+            self.db.commit()
+            return [self._confirm_message(chat_id, ctx)]
+        if step == sm.CONFIRM:
+            if text.lower() in {"1", "да", "yes", "ok", "подтвердить"}:
+                return self._create_booking(session, tenant, chat_id, max_user_id, ctx)
+            if text.lower() in {"2", "нет", "no", "отмена"}:
+                session.current_step = sm.MENU
+                session.context = {"tenant_slug": tenant.slug}
+                self.db.add(session)
+                self.db.commit()
+                return [
+                    {"chat_id": chat_id, "text": "Заявка отменена."},
+                    self._menu_message(chat_id, tenant.display_name),
+                ]
+            self.db.commit()
+            return [{"chat_id": chat_id, "text": "Отправьте 1 (да) или 2 (нет)."}]
+
+        session.current_step = sm.MENU
+        session.context = {"tenant_slug": tenant.slug}
+        self.db.add(session)
+        self.db.commit()
+        return [self._menu_message(chat_id, tenant.display_name)]
+
+    def _choose_tenant(self, session, chat_id: int, max_user_id: int, text: str):
+        tenants = self.tenants.list_active()
+        chosen = None
+        if text.isdigit():
+            idx = int(text) - 1
+            if 0 <= idx < len(tenants):
+                chosen = tenants[idx]
+        if chosen is None:
+            chosen = self.tenants.get_by_slug(text)
+        if chosen is None:
+            self.db.commit()
+            return [{"chat_id": chat_id, "text": "Отправьте номер или slug салона."}]
+        self.customers.upsert(tenant_id=chosen.id, max_user_id=max_user_id)
+        self.sessions.upsert(
+            chat_id=chat_id,
+            max_user_id=max_user_id,
+            current_tenant_id=chosen.id,
+            current_step=sm.MENU,
+            context={"tenant_slug": chosen.slug},
+        )
+        self.db.commit()
+        return [self._menu_message(chat_id, chosen.display_name)]
+
+    def _choose_service(self, session, tenant, chat_id: int, text: str, ctx: dict[str, Any]):
+        service_ids = [uuid.UUID(s) for s in ctx.get("services", [])]
+        if not text.isdigit():
+            self.db.commit()
+            return [{"chat_id": chat_id, "text": "Отправьте номер услуги."}]
+        idx = int(text) - 1
+        if idx < 0 or idx >= len(service_ids):
+            self.db.commit()
+            return [{"chat_id": chat_id, "text": "Неверный номер услуги."}]
+        service = self.catalog.get_service(tenant.id, service_ids[idx])
+        if service is None:
+            self.db.commit()
+            return [{"chat_id": chat_id, "text": "Услуга не найдена. /start"}]
+        masters = self.catalog.list_service_masters(tenant.id, service.id)
+        ctx["service_id"] = str(service.id)
+        ctx["service_name"] = service.name
+        ctx["price_snapshot"] = str(service.price)
+        ctx["duration_snapshot"] = service.duration_minutes
+        ctx["masters"] = [str(m.id) for m in masters]
+        session.current_step = sm.CHOOSE_MASTER
+        session.context = ctx
+        self.db.add(session)
+        self.db.commit()
+        lines = ["Выберите мастера:"]
+        for i, m in enumerate(masters, start=1):
+            lines.append(f"{i}. {m.display_name}")
+        lines.append(f"{len(masters) + 1}. Любой мастер")
+        lines.append("Отправьте номер.")
+        return [{"chat_id": chat_id, "text": "\n".join(lines)}]
+
+    def _choose_master(self, session, tenant, chat_id: int, text: str, ctx: dict[str, Any]):
+        masters = [uuid.UUID(m) for m in ctx.get("masters", [])]
+        if not text.isdigit():
+            self.db.commit()
+            return [{"chat_id": chat_id, "text": "Отправьте номер мастера."}]
+        idx = int(text) - 1
+        if idx == len(masters):
+            ctx["master_id"] = None
+            ctx["master_name"] = "Любой мастер"
+        elif 0 <= idx < len(masters):
+            active = self.catalog.list_active_masters(tenant.id)
+            master = next((m for m in active if m.id == masters[idx]), None)
+            ctx["master_id"] = str(masters[idx])
+            ctx["master_name"] = master.display_name if master else "Мастер"
+        else:
+            self.db.commit()
+            return [{"chat_id": chat_id, "text": "Неверный номер мастера."}]
+        session.current_step = sm.ENTER_DATE
+        session.context = ctx
+        self.db.add(session)
+        self.db.commit()
+        return [{"chat_id": chat_id, "text": "Укажите дату (например 2026-11-30)."}]
+
+    def _confirm_message(self, chat_id: int, ctx: dict[str, Any]) -> dict[str, Any]:
+        text = (
+            "Проверьте заявку:\n"
+            f"Услуга: {ctx.get('service_name')}\n"
+            f"Мастер: {ctx.get('master_name')}\n"
+            f"Дата: {ctx.get('preferred_date')}\n"
+            f"Время: {ctx.get('preferred_time_range')}\n"
+            f"Имя: {ctx.get('customer_name')}\n"
+            f"Телефон: {ctx.get('customer_phone')}\n\n"
+            "1. Подтвердить\n2. Отмена"
+        )
+        return {"chat_id": chat_id, "text": text}
+
+    def _create_booking(self, session, tenant, chat_id: int, max_user_id: int, ctx: dict):
+        booking = Booking(
+            tenant_id=tenant.id,
+            max_user_id=max_user_id,
+            chat_id=chat_id,
+            service_id=uuid.UUID(ctx["service_id"]),
+            master_id=uuid.UUID(ctx["master_id"]) if ctx.get("master_id") else None,
+            preferred_date=ctx.get("preferred_date"),
+            preferred_time_range=ctx.get("preferred_time_range"),
+            status="awaiting_salon",
+            booking_mode="request_only",
+            price_snapshot=ctx.get("price_snapshot"),
+            duration_snapshot=ctx.get("duration_snapshot"),
+            customer_name_snapshot=ctx.get("customer_name"),
+            customer_phone_encrypted=ctx.get("customer_phone"),
+        )
+        self.bookings.create(booking)
+        self.customers.upsert(
+            tenant_id=tenant.id, max_user_id=max_user_id, display_name=ctx.get("customer_name")
+        )
+        session.current_step = sm.AWAITING_SALON
+        session.context = {"tenant_slug": tenant.slug, "last_booking_id": str(booking.id)}
+        self.db.add(session)
+
+        owner_msgs = self._notify_owners(tenant.id, booking, ctx)
+        self.db.commit()
+
+        client_msg = {
+            "chat_id": chat_id,
+            "text": f"Заявка #{booking.id} создана. Статус: ожидает подтверждения салона.",
+        }
+        return [client_msg, *owner_msgs]
+
+    def _notify_owners(self, tenant_id: uuid.UUID, booking: Booking, ctx: dict):
+        owners = self.members.list_active_owners(tenant_id)
+        msgs: list[dict[str, Any]] = []
+        for owner in owners:
+            text = (
+                f"Новая заявка #{booking.id}\n"
+                f"Услуга: {ctx.get('service_name')}\n"
+                f"Мастер: {ctx.get('master_name')}\n"
+                f"Дата: {ctx.get('preferred_date')}\n"
+                f"Время: {ctx.get('preferred_time_range')}\n"
+                f"Клиент: {ctx.get('customer_name')} {ctx.get('customer_phone')}\n"
+                f"Подтвердить: /confirm {booking.id}\n"
+                f"Отклонить: /reject {booking.id}"
+            )
+            self.outbox.enqueue(
+                tenant_id=tenant_id, chat_id=owner.max_user_id, payload={"text": text}
+            )
+            msgs.append({"chat_id": owner.max_user_id, "text": text, "queued": True})
+        return msgs
+
+    def _handle_owner_command(self, chat_id: int, max_user_id: int, text: str):
+        parts = text.split()
+        if len(parts) != 2 or parts[0] not in {"/confirm", "/reject"}:
+            return None
+        cmd, booking_id_raw = parts
+        try:
+            booking_id = uuid.UUID(booking_id_raw)
+        except ValueError:
+            return [{"chat_id": chat_id, "text": "Некорректный ID заявки."}]
+
+        booking = self.bookings.get_by_id(booking_id)
+        if booking is None:
+            return [{"chat_id": chat_id, "text": "Заявка не найдена."}]
+
+        member = self.members.get_by_tenant_user(booking.tenant_id, max_user_id)
+        if member is None or member.role != "owner":
+            return [{"chat_id": chat_id, "text": "Недостаточно прав."}]
+
+        if booking.status not in {"awaiting_salon"}:
+            return [{"chat_id": chat_id, "text": f"Заявка уже обработана: {booking.status}"}]
+
+        new_status = "confirmed" if cmd == "/confirm" else "rejected"
+        self.bookings.update_status(booking, new_status)
+
+        client_text = (
+            f"Ваша заявка #{booking.id} подтверждена салоном."
+            if new_status == "confirmed"
+            else f"Заявка #{booking.id} отклонена салоном. Выберите другое время /start."
+        )
+        self.outbox.enqueue(
+            tenant_id=booking.tenant_id, chat_id=booking.chat_id, payload={"text": client_text}
+        )
+
+        owner_text = f"Заявка #{booking.id} переведена в статус {new_status}."
+        return [
+            {"chat_id": chat_id, "text": owner_text},
+            {"chat_id": booking.chat_id, "text": client_text, "queued": True},
+        ]
+
+    def _resolve_tenant(self, session):
+        if session.current_tenant_id:
+            for t in self.tenants.list_active():
+                if t.id == session.current_tenant_id:
+                    return t
+        slug = (session.context or {}).get("tenant_slug")
+        if slug:
+            return self.tenants.get_by_slug(slug)
+        return None
+
+    def _handle_callback(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        logger.info("Callback ignored in Increment 4: %s", payload.get("update_type"))
+        return []

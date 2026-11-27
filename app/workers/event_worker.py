@@ -1,17 +1,25 @@
+import asyncio
 import logging
 import time
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.session import SessionLocal
+from app.repositories.outbox_repository import OutboxRepository
 from app.repositories.webhook_event_repository import WebhookEventRepository
+from app.services.max.sender import send_text
 from app.services.webhooks.processor import WebhookEventProcessor
 
 logger = logging.getLogger(__name__)
 
 
-def process_pending_events(batch_size: int = 100, stale_after_seconds: int = 300) -> int:
-    db = SessionLocal()
+def process_pending_events(
+    batch_size: int = 100,
+    stale_after_seconds: int = 300,
+    db=None,
+) -> int:
+    owns_session = db is None
+    db = db or SessionLocal()
     try:
         repo = WebhookEventRepository(db)
         events = repo.claim_pending(limit=batch_size, stale_after_seconds=stale_after_seconds)
@@ -22,9 +30,32 @@ def process_pending_events(batch_size: int = 100, stale_after_seconds: int = 300
                 processor.process(event)
                 processed += 1
             except Exception:
-                # mark_failed already called in processor; continue batch
                 continue
         return processed
+    finally:
+        if owns_session:
+            db.close()
+
+
+def process_outbox_messages(batch_size: int = 100) -> int:
+    db = SessionLocal()
+    try:
+        repo = OutboxRepository(db)
+        messages = repo.claim_pending(limit=batch_size)
+        sent = 0
+        for msg in messages:
+            try:
+                text = str((msg.payload or {}).get("text") or "")
+                if not text:
+                    repo.mark_failed(msg, "empty payload.text")
+                    continue
+                asyncio.run(send_text(msg.chat_id, text))
+                repo.mark_sent(msg)
+                sent += 1
+            except Exception as exc:
+                logger.exception("Outbox send failed id=%s", msg.id)
+                repo.mark_failed(msg, str(exc))
+        return sent
     finally:
         db.close()
 
@@ -42,8 +73,9 @@ def run() -> None:
                 batch_size=settings.worker_batch_size,
                 stale_after_seconds=settings.worker_stale_processing_seconds,
             )
-            if processed:
-                logger.info("Processed %s webhook events", processed)
+            sent = process_outbox_messages(batch_size=settings.worker_batch_size)
+            if processed or sent:
+                logger.info("Processed %s webhook events, sent %s outbox messages", processed, sent)
         except Exception:
             logger.exception("Worker polling iteration failed")
         time.sleep(settings.worker_poll_interval_seconds)
