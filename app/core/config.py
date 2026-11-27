@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     outbox_max_attempts: int = 5
     admin_sync_secret: str = ""
     admin_allowed_ips: str = ""  # comma-separated; empty means no IP restriction
+    admin_rbac_enabled: bool = False  # scaffold only; default keeps shared-secret behavior
+    admin_rbac_default_role: str = "platform_admin"
     retention_sent_outbox_days: int = 30
     retention_processed_webhook_days: int = 30
     retention_sync_log_days: int = 90

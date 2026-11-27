@@ -61,6 +61,7 @@ Checklist перед пилотом:
 - PII (`customer_profiles`) шифруется на уровне приложения через `APP_SECRET_KEY`.
 - Ключевая ротация, retention/deletion по запросу пользователя, legal/compliance процесс — **не реализованы** в MVP, требуется отдельное решение до пилота.
 - Не логировать payload с PII/секретами; admin audit хранит только безопасный summary.
+- Процессный runbook/ticket template: `docs/pii-request-runbook.md`.
 - До пилота: определить сроки retention PII, процедуру запроса на удаление/экспорт, владельца процесса, и план ротации `APP_SECRET_KEY` (re-encrypt migration).
 
 ## MAX E2E checklist (когда появятся credentials)
@@ -73,6 +74,7 @@ Checklist перед пилотом:
 ## Ограничения
 
 - Admin auth — shared secret, не RBAC. Опциональный `ADMIN_ALLOWED_IPS` снижает риск, но не заменяет RBAC/SSO.
+- RBAC scaffold (feature-flag): `ADMIN_RBAC_ENABLED=true` включает проверку `X-Admin-Role` (`ops_viewer`, `ops_operator`, `tenant_admin`, `platform_admin`). По умолчанию выключен, поведение shared-secret сохраняется. Это scaffold до решения по SSO/IAM.
 - Tenant isolation enforced в коде/схеме/тестах, не Postgres RLS.
 - Метрики/алертинг — только базовые stats/logs; Prometheus/Grafana/alerting не настроены.
 - Retention cleanup удаляет данные без архивирования; перед включением в пилоте согласовать сроки.

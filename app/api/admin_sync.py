@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any
 
@@ -14,28 +14,43 @@ from app.models.sync_log import SyncLog
 from app.models.tenant import Tenant
 from app.repositories.admin_audit_log_repository import AdminAuditLogRepository
 from app.repositories.outbox_repository import OutboxRepository
+from app.services.admin.rbac import AdminPrincipal, resolve_admin_principal
 from app.services.admin.retention import RetentionService
 from app.services.sync.catalog_sync import CatalogSyncService
 
 router = APIRouter(tags=["admin"])
 
 
-def require_admin_sync_secret(
-    request: Request, x_admin_sync_secret: str | None = Header(default=None)
-) -> None:
-    settings = get_settings()
-    expected = settings.admin_sync_secret
-    if not expected:
-        pass  # dev mode allowed, warned by config validation
-    elif not x_admin_sync_secret or x_admin_sync_secret != expected:
-        raise HTTPException(status_code=401, detail="Invalid admin sync secret")
+def require_admin_action(action: str):
+    def _dep(
+        request: Request,
+        x_admin_sync_secret: str | None = Header(default=None),
+        x_admin_role: str | None = Header(default=None),
+    ) -> AdminPrincipal:
+        return resolve_admin_principal(
+            settings=get_settings(),
+            request=request,
+            x_admin_sync_secret=x_admin_sync_secret,
+            x_admin_role=x_admin_role,
+            action=action,
+        )
 
-    allowed_raw = (settings.admin_allowed_ips or "").strip()
-    if allowed_raw:
-        allowed = {ip.strip() for ip in allowed_raw.split(",") if ip.strip()}
-        client_ip = (request.client.host if request.client else "") or ""
-        if client_ip not in allowed:
-            raise HTTPException(status_code=403, detail="Admin IP not allowed")
+    return _dep
+
+
+def require_admin_sync_secret(
+    request: Request,
+    x_admin_sync_secret: str | None = Header(default=None),
+    x_admin_role: str | None = Header(default=None),
+) -> AdminPrincipal:
+    # Backward-compatible default: treat as platform-level admin action.
+    return resolve_admin_principal(
+        settings=get_settings(),
+        request=request,
+        x_admin_sync_secret=x_admin_sync_secret,
+        x_admin_role=x_admin_role,
+        action="*",
+    )
 
 
 def _safe_sync_summary(payload: dict[str, Any]) -> dict[str, Any]:
@@ -64,7 +79,7 @@ async def sync_tenant_csv(
     tenant_slug: str,
     payload: dict[str, Any],
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin_sync_secret),
+    _principal: AdminPrincipal = Depends(require_admin_action("admin.sync.run")),
 ) -> dict[str, Any]:
     audit = AdminAuditLogRepository(db)
     base_dir = str(payload.get("base_dir") or "").strip()
@@ -153,7 +168,7 @@ def get_sync_logs(
     tenant_slug: str,
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin_sync_secret),
+    _principal: AdminPrincipal = Depends(require_admin_action("admin.sync.logs.read")),
 ) -> dict[str, Any]:
     tenant = db.query(Tenant).filter(Tenant.slug == tenant_slug).first()
     if tenant is None:
@@ -191,7 +206,7 @@ def get_outbox_messages(
     tenant_slug: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin_sync_secret),
+    _principal: AdminPrincipal = Depends(require_admin_action("admin.outbox.read")),
 ) -> dict[str, Any]:
     if status not in {"pending", "failed", "sending", "sent", "dead"}:
         raise HTTPException(status_code=400, detail="Invalid status")
@@ -228,7 +243,7 @@ def get_outbox_messages(
 def requeue_outbox_dead(
     payload: dict[str, Any] | None = None,
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin_sync_secret),
+    _principal: AdminPrincipal = Depends(require_admin_action("admin.outbox.requeue")),
 ) -> dict[str, Any]:
     payload = payload or {}
     tenant_slug = payload.get("tenant_slug")
@@ -292,7 +307,7 @@ def requeue_outbox_dead(
 def cleanup_retention(
     payload: dict[str, Any] | None = None,
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin_sync_secret),
+    _principal: AdminPrincipal = Depends(require_admin_action("admin.cleanup.run")),
 ) -> dict[str, Any]:
     payload = payload or {}
     dry_run = bool(payload.get("dry_run", True))
@@ -323,7 +338,7 @@ def get_admin_audit(
     tenant_slug: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin_sync_secret),
+    _principal: AdminPrincipal = Depends(require_admin_action("admin.audit.read")),
 ) -> dict[str, Any]:
     tenant_id = None
     if tenant_slug:
@@ -384,7 +399,7 @@ def _build_admin_stats(db: Session, *, tenant_id=None) -> dict[str, Any]:
 def get_admin_stats(
     tenant_slug: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin_sync_secret),
+    _principal: AdminPrincipal = Depends(require_admin_action("admin.stats.read")),
 ) -> dict[str, Any]:
     tenant_id = None
     if tenant_slug:
@@ -400,7 +415,7 @@ def get_admin_stats(
 def get_admin_readiness(
     tenant_slug: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    _: None = Depends(require_admin_sync_secret),
+    _principal: AdminPrincipal = Depends(require_admin_action("admin.readiness.read")),
 ) -> dict[str, Any]:
     tenant_id = None
     tenant = None
