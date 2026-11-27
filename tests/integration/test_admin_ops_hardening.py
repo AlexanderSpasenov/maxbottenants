@@ -58,6 +58,8 @@ def test_admin_audit_log_for_sync_and_requeue(db_session, monkeypatch):
         # secret must never be stored
         dumped = str(log_row.request_summary or "") + str(log_row.error or "")
         assert "test-admin-secret" not in dumped
+        summary = log_row.request_summary or {}
+        assert summary.get("actor", {}).get("auth_mode") in {"shared_secret", "rbac_scaffold"}
 
     r = client.get("/admin/audit?tenant_slug=audit-a&limit=50", headers=headers)
     assert r.status_code == 200

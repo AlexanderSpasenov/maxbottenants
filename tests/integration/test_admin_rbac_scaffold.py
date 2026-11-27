@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
@@ -40,6 +40,9 @@ def test_rbac_scaffold_enforces_role_actions(db_session, monkeypatch):
 
     ok = client.get("/admin/stats?tenant_slug=rbac-b", headers=headers)
     assert ok.status_code == 200
+
+    audit = client.get("/admin/audit?tenant_slug=rbac-b&limit=10", headers=headers)
+    assert audit.status_code == 200
 
     denied = client.post("/admin/cleanup", json={"dry_run": True}, headers=headers)
     assert denied.status_code == 403

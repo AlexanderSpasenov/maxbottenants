@@ -22,13 +22,17 @@ class AdminAuditLogRepository:
         tenant_slug: str | None = None,
         request_summary: dict[str, Any] | None = None,
         error: str | None = None,
+        actor: dict[str, Any] | None = None,
     ) -> AdminAuditLog:
+        summary = dict(request_summary or {})
+        if actor:
+            summary.setdefault("actor", actor)
         row = AdminAuditLog(
             action=action,
             status=status,
             tenant_id=tenant_id,
             tenant_slug=tenant_slug,
-            request_summary=request_summary,
+            request_summary=summary or None,
             error=(error[:4000] if error else None),
         )
         self.db.add(row)

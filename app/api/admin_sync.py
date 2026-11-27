@@ -15,6 +15,16 @@ from app.models.tenant import Tenant
 from app.repositories.admin_audit_log_repository import AdminAuditLogRepository
 from app.repositories.outbox_repository import OutboxRepository
 from app.services.admin.rbac import AdminPrincipal, resolve_admin_principal
+
+
+def _audit_actor(principal: AdminPrincipal | None) -> dict[str, Any] | None:
+    if principal is None:
+        return None
+    return {
+        "subject": principal.subject,
+        "role": principal.role,
+        "auth_mode": principal.auth_mode,
+    }
 from app.services.admin.retention import RetentionService
 from app.services.sync.catalog_sync import CatalogSyncService
 
@@ -90,6 +100,7 @@ async def sync_tenant_csv(
             tenant_slug=tenant_slug,
             request_summary=_safe_sync_summary(payload),
             error="base_dir or catalog is required",
+            actor=_audit_actor(_principal),
         )
         db.commit()
         raise HTTPException(status_code=400, detail="base_dir or catalog is required")
@@ -102,6 +113,7 @@ async def sync_tenant_csv(
             tenant_slug=tenant_slug,
             request_summary=_safe_sync_summary(payload),
             error="Tenant not found",
+            actor=_audit_actor(_principal),
         )
         db.commit()
         raise HTTPException(status_code=404, detail="Tenant not found")
@@ -123,6 +135,7 @@ async def sync_tenant_csv(
             tenant_slug=tenant_slug,
             request_summary=summary,
             error=log.error_message,
+            actor=_audit_actor(_principal),
         )
         db.commit()
     except ValueError as exc:
@@ -134,6 +147,7 @@ async def sync_tenant_csv(
             tenant_slug=tenant_slug,
             request_summary=summary,
             error=str(exc),
+            actor=_audit_actor(_principal),
         )
         db.commit()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -146,6 +160,7 @@ async def sync_tenant_csv(
             tenant_slug=tenant_slug,
             request_summary=summary,
             error=str(exc),
+            actor=_audit_actor(_principal),
         )
         db.commit()
         raise
@@ -262,6 +277,7 @@ def requeue_outbox_dead(
                 tenant_slug=resolved_slug,
                 request_summary={"limit": limit, "reset_attempts": reset_attempts},
                 error="Tenant not found",
+                actor=_audit_actor(_principal),
             )
             db.commit()
             raise HTTPException(status_code=404, detail="Tenant not found")
@@ -281,6 +297,7 @@ def requeue_outbox_dead(
                 "reset_attempts": reset_attempts,
                 "requeued": count,
             },
+            actor=_audit_actor(_principal),
         )
         db.commit()
     except Exception as exc:
@@ -292,6 +309,7 @@ def requeue_outbox_dead(
             tenant_slug=resolved_slug,
             request_summary={"limit": limit, "reset_attempts": reset_attempts},
             error=str(exc),
+            actor=_audit_actor(_principal),
         )
         db.commit()
         raise
@@ -318,6 +336,7 @@ def cleanup_retention(
             action="retention.cleanup",
             status="ok",
             request_summary=result,
+            actor=_audit_actor(_principal),
         )
         db.commit()
     except Exception as exc:
@@ -327,6 +346,7 @@ def cleanup_retention(
             status="failed",
             request_summary={"dry_run": dry_run},
             error=str(exc),
+            actor=_audit_actor(_principal),
         )
         db.commit()
         raise
