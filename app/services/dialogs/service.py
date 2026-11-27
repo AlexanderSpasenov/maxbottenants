@@ -109,6 +109,18 @@ class DialogService:
                             " Команды: /confirm <booking_id>, /reject <booking_id>"
                         ),
                     }]
+            tenant = self.tenants.get_by_slug(token)
+            if tenant and tenant.status == "active":
+                self.customers.upsert(tenant_id=tenant.id, max_user_id=max_user_id)
+                self.sessions.upsert(
+                    chat_id=chat_id,
+                    max_user_id=max_user_id,
+                    current_tenant_id=tenant.id,
+                    current_step=sm.MENU,
+                    context={"tenant_slug": tenant.slug},
+                )
+                self.db.commit()
+                return [self._menu_message(chat_id, tenant.display_name)]
 
         tenants = self.tenants.list_active()
         if not tenants:
