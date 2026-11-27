@@ -125,14 +125,22 @@ ruff check .
 6. После задачи фиксировать: что сделано, изменённые файлы, как проверить, риски/ограничения.
 7. Перед пилотом: уникальные секреты, webhook secret включён, backup БД, reverse proxy/TLS, ограничение доступа к admin endpoints.
 
-## ���६��� 3 (�१��)
+## Инкремент 4 (текущий)
 
-Webhook persistence + idempotency + worker dispatch skeleton.
+`request_only` end-to-end skeleton (MVP flow).
 
-���� �뫮����:
-- /webhook/max �ਭ����� payload � webhook_events, ���᫨��� event_key, �������� ok/duplicate �ଥ�᭮.
-- ��⮬���� dedup ��� redelivery (�த� ���⮪ ��� 楫�� �����⭮�).
-- event_worker ����� pending/failed webhook events � ����砥� �१ ���楱᮪ WebhookEventProcessor (skeleton dispatch).
-- scripts/replay_webhook.py ���室�� ��� ���⮢�� ���ࠢ�� �訡��/payload.
+Что сделано:
+- Webhook events маршрутизируются в `DialogService`.
+- Клиентский flow: `/start <tenant_token>` или выбор салона, выбор услуги/мастера, желаемые дата/время, имя, телефон, подтверждение заявки.
+- Создаётся `Booking` со статусом `awaiting_salon`, `booking_mode=request_only`.
+- Владелец получает уведомление через `outbox_messages` (`/confirm <booking_id>`, `/reject <booking_id>`).
+- Владелец подтверждает/отклоняет; клиент получает результат через outbox.
+- Tenant isolation: owner-команды проверяют membership в tenant заявки.
+- Worker обрабатывает webhook events и отправляет outbox через MAX client abstraction (mock/real по env).
 
-���६��� �� �뫮����: �����-������� �業�� equest_only, Google Sheets sync, online_booking.
+Ограничения Increment 4:
+- Текстовый flow без rich-кнопок/callback UI MAX.
+- Нет проверки расписания/конфликтов слотов (для request_only это заявка, не автоматическое бронирование).
+- Телефон пока сохраняется как есть в поле `customer_phone_encrypted` (шифрование PII до пилота обязательно).
+- Нет owner onboarding/link redemption flow, нет admin UI/API.
+- Outbox отправка простая (без backoff/DLQ), chat_id mapping для MAX требует проверки на реальном API.
