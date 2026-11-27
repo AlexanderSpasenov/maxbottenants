@@ -1,10 +1,12 @@
-﻿# Ops Runbook (MVP)
+# Ops Runbook (MVP)
 
 ## Назначение
 
 Минимальный runbook для пилотного запуска без реального MAX-контракта/E2E. Покрывает безопасные ops-действия, retention, backup/TLS/reverse-proxy checklist и ограничения.
 
 ## Admin endpoints
+
+> Дополнительно: можно задать ADMIN_ALLOWED_IPS (comma-separated). Пустое значение = без IP-ограничения.
 
 Все admin endpoints требуют X-Admin-Sync-Secret, если задан ADMIN_SYNC_SECRET.
 
@@ -58,7 +60,7 @@ Worker периодически запускает cleanup (dry_run=false) с э
 
 ## Ограничения
 
-- Admin auth — shared secret, не RBAC.
+- Admin auth — shared secret, не RBAC. Опциональный `ADMIN_ALLOWED_IPS` снижает риск, но не заменяет RBAC/SSO.
 - Tenant isolation enforced в коде/схеме/тестах, не Postgres RLS.
 - Метрики/алертинг — только базовые stats/logs; Prometheus/Grafana/alerting не настроены.
 - Retention cleanup удаляет данные без архивирования; перед включением в пилоте согласовать сроки.

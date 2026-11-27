@@ -69,7 +69,7 @@ docker compose exec -T -e TEST_DATABASE_URL=postgresql+psycopg://maxbot:maxbot@p
 - `DATABASE_URL_SYNC`, `REDIS_URL`
 - `APP_SECRET_KEY` - обязателен для production; используется для шифрования PII
 - `MAX_WEBHOOK_SECRET`, `MAX_BOT_TOKEN` - для реального MAX
-- `ADMIN_SYNC_SECRET` - секрет для admin endpoints
+- `ADMIN_SYNC_SECRET` - секрет для admin endpoints`r`n- `ADMIN_ALLOWED_IPS` - опциональный CSV allowlist IP для admin endpoints
 - `OUTBOX_MAX_ATTEMPTS`, `WORKER_BATCH_SIZE`, `WORKER_POLL_INTERVAL_SECONDS`
 - `RETENTION_SENT_OUTBOX_DAYS`, `RETENTION_PROCESSED_WEBHOOK_DAYS`, `RETENTION_SYNC_LOG_DAYS`, `CLEANUP_INTERVAL_SECONDS`
 
@@ -78,7 +78,7 @@ docker compose exec -T -e TEST_DATABASE_URL=postgresql+psycopg://maxbot:maxbot@p
 - Нет реального MAX contract/E2E (нужны token/webhook secret/callback payload/chat addressing/rate limits, temp HTTPS tunnel).
 - Tenant isolation на уровне схемы/репозиториев/тестов, не Postgres RLS.
 - PII key rotation/retention/deletion policy не финализированы.
-- Admin auth — shared secret; нужен audit/RBAC/allowlist для пилота.
+- Admin auth — shared secret; есть опциональный IP allowlist и audit log, но для пилота нужен RBAC/SSO/полноценный аудит.
 - Google Sheets реальный API не подключен; есть CSV/fixture skeleton.
 - Нет полноценного monitoring/alerting/backup/TLS/reverse proxy runbook в прод-инфре; см. `docs/ops-runbook.md`.
 
