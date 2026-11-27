@@ -151,14 +151,22 @@ def requeue_outbox_dead(
     tenant_slug = payload.get("tenant_slug")
     limit = int(payload.get("limit") or 100)
     limit = max(1, min(limit, 500))
+    reset_attempts = bool(payload.get("reset_attempts") or False)
     tenant_id = None
     if tenant_slug:
         tenant = db.query(Tenant).filter(Tenant.slug == str(tenant_slug)).first()
         if tenant is None:
             raise HTTPException(status_code=404, detail="Tenant not found")
         tenant_id = tenant.id
-    count = OutboxRepository(db).requeue_dead(tenant_id=tenant_id, limit=limit)
-    return {"ok": True, "tenant_slug": tenant_slug, "requeued": count}
+    count = OutboxRepository(db).requeue_dead(
+        tenant_id=tenant_id, limit=limit, reset_attempts=reset_attempts
+    )
+    return {
+        "ok": True,
+        "tenant_slug": tenant_slug,
+        "requeued": count,
+        "reset_attempts": reset_attempts,
+    }
 
 
 @router.get("/admin/stats")

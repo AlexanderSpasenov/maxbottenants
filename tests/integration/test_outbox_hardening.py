@@ -32,6 +32,30 @@ def test_outbox_dead_after_max_attempts(db_session):
     db_session.refresh(msg)
     assert msg.status == "pending"
     assert msg.last_error is None
+    assert msg.attempts == 3
+
+    # dead-letter again, then requeue with attempts reset
+    repo.mark_failed(msg, "again-final", max_attempts=3)
+    db_session.refresh(msg)
+    assert msg.status == "dead"
+    repo.requeue_dead(limit=10, reset_attempts=True)
+    db_session.refresh(msg)
+    assert msg.attempts == 0
+    for i in range(3):
+        claimed = repo.claim_pending(limit=10, max_attempts=3)
+        assert len(claimed) == 1
+        m = claimed[0]
+        repo.mark_failed(m, f"again{i+1}", max_attempts=3)
+        db_session.refresh(msg)
+        if msg.status != "dead":
+            msg.next_attempt_at = msg.scheduled_at
+            db_session.add(msg)
+            db_session.commit()
+    assert msg.status == "dead"
+    repo.requeue_dead(limit=10, reset_attempts=True)
+    db_session.refresh(msg)
+    assert msg.status == "pending"
+    assert msg.attempts == 0
 
     stats = repo.stats()
     assert stats["pending"] >= 1

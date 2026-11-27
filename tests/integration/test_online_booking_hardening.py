@@ -1,4 +1,4 @@
-﻿from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -129,5 +129,6 @@ def test_online_booking_pending_confirmation_expires(db_session, monkeypatch):
     assert b.status == "expired"
     from app.models.outbox import OutboxMessage
 
-    msgs = db_session.query(OutboxMessage).filter_by(tenant_id=t.id, chat_id=100).all()
-    assert any("истекла" in (m.payload or {}).get("text", "") for m in msgs)
+    msgs = db_session.query(OutboxMessage).filter_by(tenant_id=t.id).all()
+    assert any("истекла" in (m.payload or {}).get("text", "") and m.chat_id == 100 for m in msgs)
+    assert any("истекла" in (m.payload or {}).get("text", "") and m.chat_id == 900010 for m in msgs)

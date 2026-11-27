@@ -112,7 +112,11 @@ class OutboxRepository:
         return list(self.db.scalars(stmt).all())
 
     def requeue_dead(
-        self, *, tenant_id: uuid.UUID | None = None, limit: int = 100
+        self,
+        *,
+        tenant_id: uuid.UUID | None = None,
+        limit: int = 100,
+        reset_attempts: bool = False,
     ) -> int:
         now = datetime.now(UTC)
         stmt = select(OutboxMessage).where(OutboxMessage.status == "dead")
@@ -124,7 +128,8 @@ class OutboxRepository:
             msg.status = "pending"
             msg.next_attempt_at = now
             msg.last_error = None
-            # keep attempts for audit; sender may still dead-letter again by max_attempts
+            if reset_attempts:
+                msg.attempts = 0
             self.db.add(msg)
         if rows:
             self.db.commit()

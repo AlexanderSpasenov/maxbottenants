@@ -42,24 +42,38 @@ def expire_pending_bookings(db=None) -> int:
     from datetime import UTC, datetime
 
     from app.repositories.outbox_repository import OutboxRepository
+    from app.repositories.tenant_member_repository import TenantMemberRepository
 
     owns_session = db is None
     db = db or SessionLocal()
     try:
         repo = BookingRepository(db)
         outbox = OutboxRepository(db)
+        members = TenantMemberRepository(db)
         expired = repo.expire_pending(datetime.now(UTC))
         for b in expired:
             when = ""
             if b.preferred_date:
                 when = f" на {b.preferred_date} {b.preferred_time_range or ''}".strip()
-            text = f"Бронь #{b.id}{when} истекла. Выберите другое время: /start"
+            client_text = f"Бронь #{b.id}{when} истекла. Выберите другое время: /start"
             outbox.enqueue(
                 tenant_id=b.tenant_id,
                 chat_id=b.chat_id,
-                payload={"text": text},
+                payload={"text": client_text},
                 dedupe_key=f"booking:{b.id}:expired_notify:client",
             )
+            owner_text = (
+                f"Бронь #{b.id}{when} истекла (клиент не подтвердил/время ожидания вышло)."
+            )
+            for owner in members.list_active_owners(b.tenant_id):
+                outbox.enqueue(
+                    tenant_id=b.tenant_id,
+                    chat_id=owner.max_user_id,
+                    payload={"text": owner_text},
+                    dedupe_key=f"booking:{b.id}:expired_notify:owner:{owner.max_user_id}",
+                )
+        if expired:
+            logger.info("Expired pending bookings: %s", len(expired))
         db.commit()
         return len(expired)
     finally:
