@@ -77,10 +77,10 @@ docker compose exec -T -e TEST_DATABASE_URL=postgresql+psycopg://maxbot:maxbot@p
 
 - Нет реального MAX contract/E2E (нужны token/webhook secret/callback payload/chat addressing/rate limits, temp HTTPS tunnel).
 - Tenant isolation на уровне схемы/репозиториев/тестов, не Postgres RLS.
-- PII key rotation/retention/deletion policy не финализированы.
+- PII key rotation/retention/deletion policy не финализированы (операционный/legal процесс). Технически PII шифруется `APP_SECRET_KEY`, секреты не пишутся в audit summary.
 - Admin auth — shared secret; есть опциональный IP allowlist и audit log, но для пилота нужен RBAC/SSO/полноценный аудит.
 - Google Sheets реальный API не подключен; есть CSV/fixture skeleton.
-- Monitoring/alerting/backup/TLS/reverse proxy в прод-инфре не внедрены; есть runbook и шаблоны (`docs/ops-runbook.md`, `scripts/backup_postgres.sh`, `docker-compose.proxy.yml`).
+- Monitoring/alerting/TLS/reverse proxy в прод-инфре не внедрены; есть runbook/шаблоны (`docs/ops-runbook.md`, `scripts/backup_postgres.sh`, `docker-compose.proxy.yml`). Backup/restore drill на `*_test` выполнен.
 
 ## Структура
 

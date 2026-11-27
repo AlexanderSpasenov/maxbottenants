@@ -42,6 +42,8 @@ Checklist перед пилотом:
 - Проверять restore drill на `*_test`/staging, не на production.
 - Бэкапить `.env`/secrets через secret manager или защищённое хранилище, не в git.
 - Учитывать, что PII в `customer_profiles` зашифрована `APP_SECRET_KEY`; потеря ключа делает PII нечитаемой.
+
+Фактический drill (выполнено на сервере 2026-11-27): backup создан в `/opt/maxbottenants/backups`, restore выполнен в `maxbottenants_test`, затем `pytest -q` на test DB прошёл.
 ## TLS / reverse proxy
 
 Шаблоны: `docker-compose.proxy.yml` + `deploy/nginx/maxbottenants.conf.example`.
@@ -70,3 +72,16 @@ Checklist перед пилотом:
 - Tenant isolation enforced в коде/схеме/тестах, не Postgres RLS.
 - Метрики/алертинг — только базовые stats/logs; Prometheus/Grafana/alerting не настроены.
 - Retention cleanup удаляет данные без архивирования; перед включением в пилоте согласовать сроки.
+
+## Pilot go/no-go checklist (safe, без MAX E2E)
+
+Go only if:
+- `alembic current` на head, `ruff check .` clean, `pytest -q` green на `*_test`.
+- `ADMIN_SYNC_SECRET` задан, `ADMIN_ALLOWED_IPS` настроен где возможно; `/admin/*` не открыт публично без proxy/auth.
+- Backup создан и restore drill выполнен на `*_test`.
+- Retention настроен, cleanup dry-run проверен, outbox dead-letter мониторится через `/admin/stats`.
+- `.env`/secrets вне git, APP_SECRET_KEY production-grade, PII policy согласована.
+
+No-go until external blockers closed:
+- Real MAX credentials/contract/webhook callback/button payload/chat addressing/rate limits + temp HTTPS tunnel + E2E на 2 салонах.
+- Production TLS/reverse proxy, monitoring/alerting, RBAC/SSO или эквивалентные guardrails, PII rotation/retention/deletion legal process.
