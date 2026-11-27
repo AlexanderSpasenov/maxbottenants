@@ -7,6 +7,7 @@ from app.api.health import router as health_router
 from app.api.webhook_max import router as webhook_max_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.core.request_context import RequestIdMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ def create_app() -> FastAPI:
         logger.warning("Config warning: %s", warning)
 
     app = FastAPI(title=settings.app_name)
+    app.add_middleware(RequestIdMiddleware)
     app.include_router(health_router)
     app.include_router(webhook_max_router)
     app.include_router(admin_sync_router)
