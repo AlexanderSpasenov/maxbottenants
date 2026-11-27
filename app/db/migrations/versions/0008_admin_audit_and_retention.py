@@ -42,8 +42,18 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_index(op.f("ix_admin_audit_log_status"), "admin_audit_log", ["status"], unique=False)
-    op.create_index(op.f("ix_admin_audit_log_tenant_id"), "admin_audit_log", ["tenant_id"], unique=False)
-    op.create_index(op.f("ix_admin_audit_log_tenant_slug"), "admin_audit_log", ["tenant_slug"], unique=False)
+    op.create_index(
+        op.f("ix_admin_audit_log_tenant_id"),
+        "admin_audit_log",
+        ["tenant_id"],
+        unique=False,
+    )
+    op.create_index(
+        op.f("ix_admin_audit_log_tenant_slug"),
+        "admin_audit_log",
+        ["tenant_slug"],
+        unique=False,
+    )
 
 
 def downgrade() -> None:

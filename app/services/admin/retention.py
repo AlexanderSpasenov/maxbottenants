@@ -16,10 +16,14 @@ class RetentionService:
         self.db = db
         self.settings = get_settings()
 
-    def cleanup(self, *, dry_run: bool = True, now: datetime | None = None) -> dict[str, int | bool]:
+    def cleanup(
+        self, *, dry_run: bool = True, now: datetime | None = None
+    ) -> dict[str, int | bool]:
         now = now or datetime.now(UTC)
         outbox_cutoff = now - timedelta(days=max(0, self.settings.retention_sent_outbox_days))
-        webhook_cutoff = now - timedelta(days=max(0, self.settings.retention_processed_webhook_days))
+        webhook_cutoff = now - timedelta(
+            days=max(0, self.settings.retention_processed_webhook_days)
+        )
         sync_cutoff = now - timedelta(days=max(0, self.settings.retention_sync_log_days))
 
         outbox_stmt = select(func.count()).select_from(OutboxMessage).where(
