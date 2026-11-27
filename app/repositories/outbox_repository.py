@@ -110,3 +110,34 @@ class OutboxRepository:
             stmt = stmt.where(OutboxMessage.tenant_id == tenant_id)
         stmt = stmt.order_by(OutboxMessage.scheduled_at.desc()).limit(limit)
         return list(self.db.scalars(stmt).all())
+
+    def requeue_dead(
+        self, *, tenant_id: uuid.UUID | None = None, limit: int = 100
+    ) -> int:
+        now = datetime.now(UTC)
+        stmt = select(OutboxMessage).where(OutboxMessage.status == "dead")
+        if tenant_id is not None:
+            stmt = stmt.where(OutboxMessage.tenant_id == tenant_id)
+        stmt = stmt.order_by(OutboxMessage.scheduled_at.asc()).limit(limit)
+        rows = list(self.db.scalars(stmt).all())
+        for msg in rows:
+            msg.status = "pending"
+            msg.next_attempt_at = now
+            msg.last_error = None
+            # keep attempts for audit; sender may still dead-letter again by max_attempts
+            self.db.add(msg)
+        if rows:
+            self.db.commit()
+        return len(rows)
+
+    def stats(self, *, tenant_id: uuid.UUID | None = None) -> dict[str, int]:
+        from sqlalchemy import func
+
+        stmt = select(OutboxMessage.status, func.count()).group_by(OutboxMessage.status)
+        if tenant_id is not None:
+            stmt = stmt.where(OutboxMessage.tenant_id == tenant_id)
+        rows = self.db.execute(stmt).all()
+        out = {str(status): int(count) for status, count in rows}
+        for key in ["pending", "failed", "sending", "sent", "dead"]:
+            out.setdefault(key, 0)
+        return out

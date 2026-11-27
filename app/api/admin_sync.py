@@ -139,3 +139,42 @@ def get_outbox_messages(
             for m in rows
         ],
     }
+
+
+@router.post("/admin/outbox/requeue")
+def requeue_outbox_dead(
+    payload: dict[str, Any] | None = None,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_sync_secret),
+) -> dict[str, Any]:
+    payload = payload or {}
+    tenant_slug = payload.get("tenant_slug")
+    limit = int(payload.get("limit") or 100)
+    limit = max(1, min(limit, 500))
+    tenant_id = None
+    if tenant_slug:
+        tenant = db.query(Tenant).filter(Tenant.slug == str(tenant_slug)).first()
+        if tenant is None:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+        tenant_id = tenant.id
+    count = OutboxRepository(db).requeue_dead(tenant_id=tenant_id, limit=limit)
+    return {"ok": True, "tenant_slug": tenant_slug, "requeued": count}
+
+
+@router.get("/admin/stats")
+def get_admin_stats(
+    tenant_slug: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_sync_secret),
+) -> dict[str, Any]:
+    from app.repositories.webhook_event_repository import WebhookEventRepository
+
+    tenant_id = None
+    if tenant_slug:
+        tenant = db.query(Tenant).filter(Tenant.slug == tenant_slug).first()
+        if tenant is None:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+        tenant_id = tenant.id
+    outbox = OutboxRepository(db).stats(tenant_id=tenant_id)
+    webhooks = WebhookEventRepository(db).stats()
+    return {"tenant_slug": tenant_slug, "outbox": outbox, "webhooks": webhooks}

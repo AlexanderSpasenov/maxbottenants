@@ -26,3 +26,13 @@ def test_outbox_dead_after_max_attempts(db_session):
     assert msg.status == "dead"
     assert msg.attempts == 3
     assert "err3" in (msg.last_error or "")
+
+    requeued = repo.requeue_dead(limit=10)
+    assert requeued == 1
+    db_session.refresh(msg)
+    assert msg.status == "pending"
+    assert msg.last_error is None
+
+    stats = repo.stats()
+    assert stats["pending"] >= 1
+    assert stats["dead"] == 0

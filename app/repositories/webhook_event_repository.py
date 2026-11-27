@@ -94,3 +94,14 @@ class WebhookEventRepository:
         event.last_error = error[:4000]
         self.db.add(event)
         self.db.commit()
+
+    def stats(self) -> dict[str, int]:
+        from sqlalchemy import func
+
+        rows = self.db.execute(
+            select(WebhookEvent.status, func.count()).group_by(WebhookEvent.status)
+        ).all()
+        out = {str(status): int(count) for status, count in rows}
+        for key in ["received", "processing", "processed", "failed"]:
+            out.setdefault(key, 0)
+        return out
