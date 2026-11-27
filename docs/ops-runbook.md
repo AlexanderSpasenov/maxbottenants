@@ -1,4 +1,4 @@
-﻿# Ops Runbook (MVP)
+# Ops Runbook (MVP)
 
 ## Назначение
 
@@ -17,6 +17,7 @@
 - `POST /admin/cleanup` — body: `{ "dry_run": true }` по умолчанию. Удаляет только старые `sent` outbox, `processed` webhook_events, старые `sync_log`. Не трогает `pending/failed/sending/dead`.
 - `GET /admin/audit?tenant_slug=...&limit=50` — audit log admin-действий. Секреты не логируются.
 - `GET /admin/stats?tenant_slug=...` — агрегированные outbox/webhook/sync stats, включая `oldest_dead_at`.
+- `GET /admin/readiness?tenant_slug=...` — safe pre-pilot checks (secret, app key non-default, dead outbox, retention, tenant active) + stats.
 
 ## Retention / cleanup
 

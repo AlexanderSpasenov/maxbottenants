@@ -70,6 +70,7 @@ docker compose exec -T -e TEST_DATABASE_URL=postgresql+psycopg://maxbot:maxbot@p
 - `APP_SECRET_KEY` - обязателен для production; используется для шифрования PII
 - `MAX_WEBHOOK_SECRET`, `MAX_BOT_TOKEN` - для реального MAX
 - `ADMIN_SYNC_SECRET` - секрет для admin endpoints`r`n- `ADMIN_ALLOWED_IPS` - опциональный CSV allowlist IP для admin endpoints
+- `GET /admin/readiness` - safe pre-pilot checks; см. `docs/pilot-readiness.md`
 - `OUTBOX_MAX_ATTEMPTS`, `WORKER_BATCH_SIZE`, `WORKER_POLL_INTERVAL_SECONDS`
 - `RETENTION_SENT_OUTBOX_DAYS`, `RETENTION_PROCESSED_WEBHOOK_DAYS`, `RETENTION_SYNC_LOG_DAYS`, `CLEANUP_INTERVAL_SECONDS`
 
@@ -80,7 +81,7 @@ docker compose exec -T -e TEST_DATABASE_URL=postgresql+psycopg://maxbot:maxbot@p
 - PII key rotation/retention/deletion policy не финализированы (операционный/legal процесс). Технически PII шифруется `APP_SECRET_KEY`, секреты не пишутся в audit summary.
 - Admin auth — shared secret; есть опциональный IP allowlist и audit log, но для пилота нужен RBAC/SSO/полноценный аудит.
 - Google Sheets реальный API не подключен; есть CSV/fixture skeleton.
-- Monitoring/alerting/TLS/reverse proxy в прод-инфре не внедрены; есть runbook/шаблоны (`docs/ops-runbook.md`, `scripts/backup_postgres.sh`, `docker-compose.proxy.yml`). Backup/restore drill на `*_test` выполнен.
+- Monitoring/alerting/TLS/reverse proxy в прод-инфре не внедрены; есть runbook/шаблоны (`docs/ops-runbook.md`, `docs/pilot-readiness.md`, `scripts/backup_postgres.sh`, `scripts/pilot_readiness_check.sh`, `docker-compose.proxy.yml`). Backup/restore drill на `*_test` выполнен.
 
 ## Структура
 
