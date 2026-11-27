@@ -1,5 +1,6 @@
 """Repository layer. All tenant-data queries must require tenant_id."""
 
+from app.repositories.admin_audit_log_repository import AdminAuditLogRepository
 from app.repositories.booking_repository import BookingRepository
 from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.customer_profile_repository import CustomerProfileRepository
@@ -11,6 +12,7 @@ from app.repositories.tenant_repository import TenantRepository
 from app.repositories.webhook_event_repository import WebhookEventRepository
 
 __all__ = [
+    "AdminAuditLogRepository",
     "BookingRepository",
     "CatalogRepository",
     "CustomerProfileRepository",

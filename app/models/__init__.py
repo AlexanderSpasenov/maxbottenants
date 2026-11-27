@@ -1,5 +1,6 @@
 """ORM models package."""
 
+from app.models.admin_audit_log import AdminAuditLog
 from app.models.booking import Booking
 from app.models.catalog import Master, Service, ServiceMaster
 from app.models.consent_record import ConsentRecord
@@ -14,6 +15,7 @@ from app.models.tenant_member import TenantMember
 from app.models.webhook import WebhookEvent
 
 __all__ = [
+    "AdminAuditLog",
     "Booking",
     "ConsentRecord",
     "CustomerProfile",
