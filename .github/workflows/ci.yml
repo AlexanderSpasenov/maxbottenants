@@ -104,6 +104,13 @@ jobs:
           test -f docs/ops-runbook.md
           test -f docs/pilot-readiness.md
           test -f docs/pii-request-runbook.md
+          test -f docs/pii-request-issue-template.md
+          test -f docs/max-contract-capture.md
+          test -f tests/fixtures/max/inbound_message.masked.example.json
+          test -f tests/fixtures/max/callback.masked.example.json
+          test -f tests/fixtures/max/verification_challenge.masked.example.json
+          test -f tests/fixtures/max/delivery_status.masked.example.json
+          test -f tests/fixtures/max/redelivery.masked.example.json
       - name: Migrations
         run: alembic upgrade head
       - name: Start app

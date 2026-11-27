@@ -506,4 +506,9 @@ def get_admin_readiness(
         "ready": required_ok,
         "checks": checks,
         "stats": stats,
+        "actor": _audit_actor(_principal),
+        "rbac": {
+            "enabled": settings.admin_rbac_enabled,
+            "default_role": settings.admin_rbac_default_role,
+        },
     }

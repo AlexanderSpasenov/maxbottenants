@@ -1,0 +1,7 @@
+﻿{
+  "note": "MASKED EXAMPLE. Replace with real captured payload.",
+  "type": "delivery_status",
+  "http": {"method": "POST", "path": "/webhook/max/<tenant>", "headers": {"X-Max-Signature": "<masked>"}},
+  "body": {"event_type": "message_status", "status": "delivered", "message_id": "<id>"},
+  "expected": {"status": 200, "side_effect": "optional status tracking, no duplicate user action"}
+}

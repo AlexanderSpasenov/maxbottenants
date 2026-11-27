@@ -1,4 +1,4 @@
-﻿# MAX Contract Capture Kit (подготовка к вечеру)
+﻿# MAX Contract Capture Kit (подготовка к вечерним данным)
 
 Цель: быстро и безопасно зафиксировать реальный контракт MAX, когда появятся данные по боту, без угадывания поведения.
 
@@ -12,16 +12,28 @@
   - callback/button click
   - command/menu event
   - delivery/status/update event (если есть)
-  - любой webhook verification/challenge event (если есть)
+  - webhook verification/challenge event (если есть)
+  - error/retry/redelivery case (если есть)
 - Для каждого payload: HTTP method, path, headers (секреты маскировать), raw body, ожидаемое поведение бота.
 - Контракт ответа MAX Bot API: endpoint, auth header, chat/user addressing fields, ограничения по rate limit, формат кнопок/callback data.
 - Данные 2 тестовых салонов: `tenant_slug`, название, owner chat/user id, тестовый пользователь.
 
-## Куда складывать в репо
+## Куда складывать
 
 - Маскированные fixtures: `tests/fixtures/max/*.json` (без токенов/секретов/реальных PII).
 - Сырые чувствительные дампы: **не в git**; локально/в secret storage.
 - Итог адаптации: обновить normalizer/adapter + integration tests.
+
+## Маппинг полей (заполнить по реальному контракту)
+
+| MAX field | Internal field | Notes |
+|---|---|---|
+| `...` | `event_key` / dedupe key | must be stable for redelivery |
+| `...` | `tenant_slug` / routing | from URL or payload |
+| `...` | `chat_id` / sender | owner vs customer routing |
+| `...` | `text` / command | `/start`, menu, free text |
+| `...` | `callback_data` | confirm/reject/book actions |
+| `...` | `timestamp` | timezone/format |
 
 ## Чеклист интеграции после получения данных
 

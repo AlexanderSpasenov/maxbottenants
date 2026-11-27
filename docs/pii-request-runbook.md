@@ -1,4 +1,4 @@
-﻿# PII Deletion/Export Request Runbook (Draft, process ticket)
+# PII Deletion/Export Request Runbook (Draft, process ticket)
 
 **Status:** Draft / process ticket. No automated PII deletion/export workflow is implemented in MVP.
 
@@ -69,3 +69,8 @@ Define a safe, auditable process for handling customer PII export/deletion reque
 - Rows affected/evidence:
 - Artifacts deleted:
 - Close-out reviewer:
+
+
+## GitHub issue template
+
+Use docs/pii-request-issue-template.md for ticket intake. Keep raw PII/secrets out of issues.

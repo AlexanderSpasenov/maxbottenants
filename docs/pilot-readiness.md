@@ -1,4 +1,4 @@
-﻿# Pilot Readiness (без MAX E2E)
+# Pilot Readiness (без MAX E2E)
 
 Этот документ фиксирует, что можно проверить/подготовить до получения реального MAX-контракта и credentials.
 
@@ -15,7 +15,7 @@
 - `alembic current` на head; `ruff check .` clean; `pytest -q` green на `*_test`.
 - `GET /health/live` и `GET /health/ready` возвращают 200.
 - `ADMIN_SYNC_SECRET` задан; `ADMIN_ALLOWED_IPS` настроен где возможно; `/admin/*` не открыт публично без proxy/auth.
-- `GET /admin/readiness` возвращает `ready=true` для целевого tenant/окружения.
+- `GET /admin/readiness` возвращает `ready=true` для целевого tenant/окружения; содержит `actor` и `rbac` scaffold state.
 - Backup создан и restore drill выполнен на `*_test`.
 - Retention настроен; `POST /admin/cleanup` с `dry_run=true` проверен; outbox dead-letter мониторится.
 - `.env`/secrets вне git; `APP_SECRET_KEY` production-grade.

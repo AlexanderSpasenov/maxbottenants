@@ -36,4 +36,6 @@ def test_admin_readiness_reports_checks(db_session, monkeypatch):
     assert body["checks"]["admin_secret_configured"]["ok"] is True
     assert body["checks"]["outbox_dead_empty"]["ok"] is True
     assert "stats" in body
+    assert body["actor"]["auth_mode"] in {"shared_secret", "rbac_scaffold"}
+    assert "enabled" in body["rbac"]
     get_settings.cache_clear()

@@ -1,0 +1,7 @@
+﻿{
+  "note": "MASKED EXAMPLE. Replace with real captured payload for duplicate delivery/redelivery.",
+  "type": "redelivery",
+  "http": {"method": "POST", "path": "/webhook/max/<tenant>", "headers": {"X-Max-Signature": "<masked>"}},
+  "body": {"event_type": "message_created", "message": {"id": "<same-id>", "chat_id": "<chat-id>", "text": "/start"}},
+  "expected": {"status": 200, "side_effect": "idempotent; no duplicate domain effect"}
+}

@@ -70,7 +70,7 @@ docker compose exec -T -e TEST_DATABASE_URL=postgresql+psycopg://maxbot:maxbot@p
 - `APP_SECRET_KEY` - обязателен для production; используется для шифрования PII
 - `MAX_WEBHOOK_SECRET`, `MAX_BOT_TOKEN` - для реального MAX
 - `ADMIN_SYNC_SECRET` - секрет для admin endpoints`r`n- `ADMIN_ALLOWED_IPS` - опциональный CSV allowlist IP для admin endpoints
-- `GET /admin/readiness` - safe pre-pilot checks; см. `docs/pilot-readiness.md`
+- `GET /admin/readiness` - safe pre-pilot checks (+ actor/rbac scaffold state); см. `docs/pilot-readiness.md`
 - `OUTBOX_MAX_ATTEMPTS`, `WORKER_BATCH_SIZE`, `WORKER_POLL_INTERVAL_SECONDS`
 - `RETENTION_SENT_OUTBOX_DAYS`, `RETENTION_PROCESSED_WEBHOOK_DAYS`, `RETENTION_SYNC_LOG_DAYS`, `CLEANUP_INTERVAL_SECONDS`
 

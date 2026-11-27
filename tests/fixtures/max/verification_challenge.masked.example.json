@@ -1,0 +1,7 @@
+﻿{
+  "note": "MASKED EXAMPLE. Replace with real captured payload.",
+  "type": "verification_or_challenge",
+  "http": {"method": "POST", "path": "/webhook/max/<tenant>", "headers": {"X-Max-Signature": "<masked>"}},
+  "body": {},
+  "expected": {"status": 200, "response_body": "<as required by MAX>"}
+}
