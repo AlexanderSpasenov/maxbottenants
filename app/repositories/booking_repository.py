@@ -30,6 +30,31 @@ class BookingRepository:
         self.db.flush()
         return booking
 
+    def transition_status(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        booking_id: uuid.UUID,
+        from_status: str,
+        to_status: str,
+    ) -> Booking | None:
+        stmt = (
+            select(Booking)
+            .where(
+                Booking.id == booking_id,
+                Booking.tenant_id == tenant_id,
+                Booking.status == from_status,
+            )
+            .with_for_update()
+        )
+        booking = self.db.scalar(stmt)
+        if booking is None:
+            return None
+        booking.status = to_status
+        self.db.add(booking)
+        self.db.flush()
+        return booking
+
     def list_for_user(self, tenant_id: uuid.UUID, max_user_id: int) -> list[Booking]:
         stmt = (
             select(Booking)

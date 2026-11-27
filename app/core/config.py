@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     max_webhook_enabled: bool = False
     worker_batch_size: int = 100
     worker_stale_processing_seconds: int = 300
+    outbox_max_attempts: int = 5
 
     def validate_runtime(self) -> list[str]:
         warnings: list[str] = []

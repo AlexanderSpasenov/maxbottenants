@@ -142,6 +142,8 @@ def test_request_only_happy_path_creates_booking_and_notifies_owner(db_session):
     assert len(outbox) >= 1
     assert f"#{booking.id}" in outbox[0].payload["text"]
     assert "/confirm" in outbox[0].payload["text"]
+    assert "+79990000000" not in outbox[0].payload["text"]
+    assert "0000" in outbox[0].payload["text"]
 
 
 def test_owner_confirm_updates_booking_and_notifies_client(db_session):

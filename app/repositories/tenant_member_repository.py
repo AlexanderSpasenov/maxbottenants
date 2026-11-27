@@ -20,6 +20,16 @@ class TenantMemberRepository:
         )
         return self.db.scalar(stmt)
 
+    def create(
+        self, *, tenant_id: uuid.UUID, max_user_id: int, role: str
+    ) -> TenantMember:
+        member = TenantMember(
+            tenant_id=tenant_id, max_user_id=max_user_id, role=role, is_active=True
+        )
+        self.db.add(member)
+        self.db.flush()
+        return member
+
     def list_active_owners(self, tenant_id: uuid.UUID) -> list[TenantMember]:
         stmt = select(TenantMember).where(
             TenantMember.tenant_id == tenant_id,

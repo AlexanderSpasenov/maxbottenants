@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.crypto import encrypt_value, mask_phone
 from app.models.booking import Booking
 from app.repositories.booking_repository import BookingRepository
 from app.repositories.catalog_repository import CatalogRepository
@@ -72,18 +74,42 @@ class DialogService:
         token = parts[1].strip() if len(parts) > 1 else ""
         if token:
             link = self.links.get_by_token(token)
-            if link and link.link_type == "client" and link.tenant:
+            if link and link.tenant:
                 tenant = link.tenant
-                self.customers.upsert(tenant_id=tenant.id, max_user_id=max_user_id)
-                self.sessions.upsert(
-                    chat_id=chat_id,
-                    max_user_id=max_user_id,
-                    current_tenant_id=tenant.id,
-                    current_step=sm.MENU,
-                    context={"tenant_slug": tenant.slug},
-                )
-                self.db.commit()
-                return [self._menu_message(chat_id, tenant.display_name)]
+                if link.link_type == "client":
+                    self.customers.upsert(tenant_id=tenant.id, max_user_id=max_user_id)
+                    self.sessions.upsert(
+                        chat_id=chat_id,
+                        max_user_id=max_user_id,
+                        current_tenant_id=tenant.id,
+                        current_step=sm.MENU,
+                        context={"tenant_slug": tenant.slug},
+                    )
+                    self.db.commit()
+                    return [self._menu_message(chat_id, tenant.display_name)]
+                if link.link_type in {"owner", "admin"}:
+                    member = self.members.get_by_tenant_user(tenant.id, max_user_id)
+                    if member is None:
+                        self.members.create(
+                            tenant_id=tenant.id,
+                            max_user_id=max_user_id,
+                            role="owner",
+                        )
+                    self.sessions.upsert(
+                        chat_id=chat_id,
+                        max_user_id=max_user_id,
+                        current_tenant_id=tenant.id,
+                        current_step=sm.MENU,
+                        context={"tenant_slug": tenant.slug, "role": "owner"},
+                    )
+                    self.db.commit()
+                    return [{
+                        "chat_id": chat_id,
+                        "text": (
+                            f"Вы привязаны как владелец салона {tenant.display_name}."
+                            " Команды: /confirm <booking_id>, /reject <booking_id>"
+                        ),
+                    }]
 
         tenants = self.tenants.list_active()
         if not tenants:
@@ -179,7 +205,16 @@ class DialogService:
             self.db.commit()
             return [{"chat_id": chat_id, "text": "Укажите время (например 15:00-17:00)."}]
         if step == sm.ENTER_TIME:
-            ctx["preferred_time_range"] = text
+            normalized = self._normalize_time_range(text)
+            if not normalized:
+                self.db.commit()
+                return [
+                    {
+                        "chat_id": chat_id,
+                        "text": "Неверное время. Формат HH:MM или HH:MM-HH:MM.",
+                    }
+                ]
+            ctx["preferred_time_range"] = normalized
             session.current_step = sm.ENTER_NAME
             session.context = ctx
             self.db.add(session)
@@ -193,7 +228,16 @@ class DialogService:
             self.db.commit()
             return [{"chat_id": chat_id, "text": "Введите телефон для связи."}]
         if step == sm.ENTER_PHONE:
-            ctx["customer_phone"] = text
+            phone = self._normalize_phone(text)
+            if not phone:
+                self.db.commit()
+                return [
+                    {
+                        "chat_id": chat_id,
+                        "text": "Неверный телефон. Минимум 10 цифр.",
+                    }
+                ]
+            ctx["customer_phone"] = phone
             session.current_step = sm.CONFIRM
             session.context = ctx
             self.db.add(session)
@@ -304,12 +348,13 @@ class DialogService:
             f"Дата: {ctx.get('preferred_date')}\n"
             f"Время: {ctx.get('preferred_time_range')}\n"
             f"Имя: {ctx.get('customer_name')}\n"
-            f"Телефон: {ctx.get('customer_phone')}\n\n"
+            f"Телефон: {mask_phone(ctx.get('customer_phone'))}\n\n"
             "1. Подтвердить\n2. Отмена"
         )
         return {"chat_id": chat_id, "text": text}
 
     def _create_booking(self, session, tenant, chat_id: int, max_user_id: int, ctx: dict):
+        phone = str(ctx.get("customer_phone") or "")
         booking = Booking(
             tenant_id=tenant.id,
             max_user_id=max_user_id,
@@ -323,11 +368,14 @@ class DialogService:
             price_snapshot=ctx.get("price_snapshot"),
             duration_snapshot=ctx.get("duration_snapshot"),
             customer_name_snapshot=ctx.get("customer_name"),
-            customer_phone_encrypted=ctx.get("customer_phone"),
+            customer_phone_encrypted=encrypt_value(phone),
         )
         self.bookings.create(booking)
         self.customers.upsert(
-            tenant_id=tenant.id, max_user_id=max_user_id, display_name=ctx.get("customer_name")
+            tenant_id=tenant.id,
+            max_user_id=max_user_id,
+            display_name=ctx.get("customer_name"),
+            phone_encrypted=encrypt_value(phone),
         )
         session.current_step = sm.AWAITING_SALON
         session.context = {"tenant_slug": tenant.slug, "last_booking_id": str(booking.id)}
@@ -352,12 +400,15 @@ class DialogService:
                 f"Мастер: {ctx.get('master_name')}\n"
                 f"Дата: {ctx.get('preferred_date')}\n"
                 f"Время: {ctx.get('preferred_time_range')}\n"
-                f"Клиент: {ctx.get('customer_name')} {ctx.get('customer_phone')}\n"
+                f"Клиент: {ctx.get('customer_name')} {mask_phone(ctx.get('customer_phone'))}\n"
                 f"Подтвердить: /confirm {booking.id}\n"
                 f"Отклонить: /reject {booking.id}"
             )
             self.outbox.enqueue(
-                tenant_id=tenant_id, chat_id=owner.max_user_id, payload={"text": text}
+                tenant_id=tenant_id,
+                chat_id=owner.max_user_id,
+                payload={"text": text},
+                dedupe_key=f"booking:{booking.id}:owner_notify:{owner.max_user_id}",
             )
             msgs.append({"chat_id": owner.max_user_id, "text": text, "queued": True})
         return msgs
@@ -380,11 +431,18 @@ class DialogService:
         if member is None or member.role != "owner":
             return [{"chat_id": chat_id, "text": "Недостаточно прав."}]
 
-        if booking.status not in {"awaiting_salon"}:
+        # Atomic status transition for idempotent owner commands.
+        updated = self.bookings.transition_status(
+            tenant_id=booking.tenant_id,
+            booking_id=booking.id,
+            from_status="awaiting_salon",
+            to_status="confirmed" if cmd == "/confirm" else "rejected",
+        )
+        if updated is None:
+            self.db.refresh(booking)
             return [{"chat_id": chat_id, "text": f"Заявка уже обработана: {booking.status}"}]
-
-        new_status = "confirmed" if cmd == "/confirm" else "rejected"
-        self.bookings.update_status(booking, new_status)
+        booking = updated
+        new_status = booking.status
 
         client_text = (
             f"Ваша заявка #{booking.id} подтверждена салоном."
@@ -412,5 +470,49 @@ class DialogService:
         return None
 
     def _handle_callback(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
-        logger.info("Callback ignored in Increment 4: %s", payload.get("update_type"))
+        # Safe default: callbacks are not trusted/routed until real MAX contract is confirmed.
+        callback = payload.get("callback") if isinstance(payload.get("callback"), dict) else {}
+        logger.info(
+            "Callback ignored (contract not confirmed): update_type=%s callback_id=%s",
+            payload.get("update_type"),
+            callback.get("callback_id") or callback.get("id"),
+        )
         return []
+
+    @staticmethod
+    def _normalize_date(value: str) -> str | None:
+        try:
+            d = date.fromisoformat(value.strip())
+        except ValueError:
+            return None
+        if d < datetime.now(UTC).date():
+            return None
+        return d.isoformat()
+
+    @staticmethod
+    def _normalize_time_range(value: str) -> str | None:
+        raw = value.strip().replace(" ", "")
+        if not raw:
+            return None
+        if "-" in raw:
+            left, right = raw.split("-", 1)
+            try:
+                t1 = datetime.strptime(left, "%H:%M").time()
+                t2 = datetime.strptime(right, "%H:%M").time()
+            except ValueError:
+                return None
+            if t2 <= t1:
+                return None
+            return f"{t1.strftime('%H:%M')}-{t2.strftime('%H:%M')}"
+        try:
+            t = datetime.strptime(raw, "%H:%M").time()
+        except ValueError:
+            return None
+        return t.strftime("%H:%M")
+
+    @staticmethod
+    def _normalize_phone(value: str) -> str | None:
+        digits = "".join(ch for ch in value if ch.isdigit())
+        if len(digits) < 10 or len(digits) > 15:
+            return None
+        return "+" + digits

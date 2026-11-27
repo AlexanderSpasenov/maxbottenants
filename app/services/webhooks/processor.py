@@ -29,8 +29,11 @@ class WebhookEventProcessor:
                 event.attempts,
             )
             responses = self.dialogs.handle_event(event.payload or {})
-            for resp in responses:
-                logger.info("Dialog response: %s", resp)
+            logger.info(
+                "Dialog produced %s responses for event=%s",
+                len(responses),
+                event.event_key,
+            )
             self.repo.mark_processed(event)
         except Exception as exc:
             logger.exception("Webhook event processing failed: %s", event.event_key)

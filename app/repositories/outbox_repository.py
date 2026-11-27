@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.outbox import OutboxMessage
@@ -19,23 +20,54 @@ class OutboxRepository:
         tenant_id: uuid.UUID | None,
         chat_id: int,
         payload: dict,
+        dedupe_key: str | None = None,
+        next_attempt_at: datetime | None = None,
     ) -> OutboxMessage:
+        if dedupe_key:
+            stmt = select(OutboxMessage).where(
+                OutboxMessage.tenant_id == tenant_id,
+                OutboxMessage.dedupe_key == dedupe_key,
+            )
+            existing = self.db.scalar(stmt)
+            if existing is not None:
+                return existing
+
         msg = OutboxMessage(
             tenant_id=tenant_id,
             chat_id=chat_id,
             payload=payload,
             status="pending",
             attempts=0,
+            dedupe_key=dedupe_key,
+            next_attempt_at=next_attempt_at or datetime.now(UTC),
         )
         self.db.add(msg)
-        self.db.flush()
+        try:
+            self.db.flush()
+        except IntegrityError:
+            self.db.rollback()
+            if dedupe_key:
+                existing = self.db.scalar(
+                    select(OutboxMessage).where(
+                        OutboxMessage.tenant_id == tenant_id,
+                        OutboxMessage.dedupe_key == dedupe_key,
+                    )
+                )
+                if existing is not None:
+                    return existing
+            raise
         return msg
 
-    def claim_pending(self, limit: int = 100) -> list[OutboxMessage]:
+    def claim_pending(self, limit: int = 100, max_attempts: int = 5) -> list[OutboxMessage]:
+        now = datetime.now(UTC)
         stmt = (
             select(OutboxMessage)
-            .where(OutboxMessage.status.in_(["pending", "failed"]))
-            .order_by(OutboxMessage.scheduled_at.asc())
+            .where(
+                OutboxMessage.status.in_(["pending", "failed"]),
+                OutboxMessage.next_attempt_at <= now,
+                OutboxMessage.attempts < max_attempts,
+            )
+            .order_by(OutboxMessage.next_attempt_at.asc(), OutboxMessage.scheduled_at.asc())
             .limit(limit)
             .with_for_update(skip_locked=True)
         )
@@ -58,8 +90,14 @@ class OutboxRepository:
         self.db.add(msg)
         self.db.commit()
 
-    def mark_failed(self, msg: OutboxMessage, error: str) -> None:
-        msg.status = "failed"
+    def mark_failed(self, msg: OutboxMessage, error: str, max_attempts: int = 5) -> None:
         msg.last_error = error[:4000]
+        if (msg.attempts or 0) >= max_attempts:
+            msg.status = "dead"
+            msg.next_attempt_at = datetime.now(UTC)
+        else:
+            msg.status = "failed"
+            backoff_seconds = min(300, 2 ** max((msg.attempts or 1) - 1, 0) * 15)
+            msg.next_attempt_at = datetime.now(UTC) + timedelta(seconds=backoff_seconds)
         self.db.add(msg)
         self.db.commit()

@@ -37,24 +37,24 @@ def process_pending_events(
             db.close()
 
 
-def process_outbox_messages(batch_size: int = 100) -> int:
+def process_outbox_messages(batch_size: int = 100, max_attempts: int = 5) -> int:
     db = SessionLocal()
     try:
         repo = OutboxRepository(db)
-        messages = repo.claim_pending(limit=batch_size)
+        messages = repo.claim_pending(limit=batch_size, max_attempts=max_attempts)
         sent = 0
         for msg in messages:
             try:
                 text = str((msg.payload or {}).get("text") or "")
                 if not text:
-                    repo.mark_failed(msg, "empty payload.text")
+                    repo.mark_failed(msg, "empty payload.text", max_attempts=max_attempts)
                     continue
                 asyncio.run(send_text(msg.chat_id, text))
                 repo.mark_sent(msg)
                 sent += 1
             except Exception as exc:
                 logger.exception("Outbox send failed id=%s", msg.id)
-                repo.mark_failed(msg, str(exc))
+                repo.mark_failed(msg, str(exc), max_attempts=max_attempts)
         return sent
     finally:
         db.close()
@@ -73,7 +73,10 @@ def run() -> None:
                 batch_size=settings.worker_batch_size,
                 stale_after_seconds=settings.worker_stale_processing_seconds,
             )
-            sent = process_outbox_messages(batch_size=settings.worker_batch_size)
+            sent = process_outbox_messages(
+                batch_size=settings.worker_batch_size,
+                max_attempts=settings.outbox_max_attempts,
+            )
             if processed or sent:
                 logger.info("Processed %s webhook events, sent %s outbox messages", processed, sent)
         except Exception:
