@@ -41,13 +41,27 @@ def process_pending_events(
 def expire_pending_bookings(db=None) -> int:
     from datetime import UTC, datetime
 
+    from app.repositories.outbox_repository import OutboxRepository
+
     owns_session = db is None
     db = db or SessionLocal()
     try:
         repo = BookingRepository(db)
+        outbox = OutboxRepository(db)
         expired = repo.expire_pending(datetime.now(UTC))
+        for b in expired:
+            when = ""
+            if b.preferred_date:
+                when = f" на {b.preferred_date} {b.preferred_time_range or ''}".strip()
+            text = f"Бронь #{b.id}{when} истекла. Выберите другое время: /start"
+            outbox.enqueue(
+                tenant_id=b.tenant_id,
+                chat_id=b.chat_id,
+                payload={"text": text},
+                dedupe_key=f"booking:{b.id}:expired_notify:client",
+            )
         db.commit()
-        return expired
+        return len(expired)
     finally:
         if owns_session:
             db.close()

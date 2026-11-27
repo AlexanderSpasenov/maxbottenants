@@ -127,3 +127,7 @@ def test_online_booking_pending_confirmation_expires(db_session, monkeypatch):
     assert expired == 1
     db_session.refresh(b)
     assert b.status == "expired"
+    from app.models.outbox import OutboxMessage
+
+    msgs = db_session.query(OutboxMessage).filter_by(tenant_id=t.id, chat_id=100).all()
+    assert any("истекла" in (m.payload or {}).get("text", "") for m in msgs)

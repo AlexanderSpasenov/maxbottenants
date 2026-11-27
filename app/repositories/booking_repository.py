@@ -109,11 +109,15 @@ class BookingRepository:
             stmt = stmt.where(Booking.id != exclude_booking_id)
         return self.db.scalar(stmt) is not None
 
-    def expire_pending(self, now) -> int:
-        stmt = select(Booking).where(
-            Booking.status == "pending_confirmation",
-            Booking.expires_at.is_not(None),
-            Booking.expires_at <= now,
+    def expire_pending(self, now) -> list[Booking]:
+        stmt = (
+            select(Booking)
+            .where(
+                Booking.status == "pending_confirmation",
+                Booking.expires_at.is_not(None),
+                Booking.expires_at <= now,
+            )
+            .with_for_update(skip_locked=True)
         )
         rows = list(self.db.scalars(stmt).all())
         for b in rows:
@@ -121,4 +125,4 @@ class BookingRepository:
             self.db.add(b)
         if rows:
             self.db.flush()
-        return len(rows)
+        return rows

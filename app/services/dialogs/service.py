@@ -499,6 +499,7 @@ class DialogService:
         )
         try:
             self.bookings.create(booking)
+            self.db.flush()
         except Exception:
             self.db.rollback()
             session.current_step = sm.ENTER_DATE
@@ -507,7 +508,7 @@ class DialogService:
             self.db.commit()
             return [{
                 "chat_id": chat_id,
-                "text": "Не удалось зарезервировать слот. Выберите другой.",
+                "text": "Этот слот уже занят. Выберите другую дату/время.",
             }]
         self.customers.upsert(
             tenant_id=tenant.id,
