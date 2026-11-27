@@ -1,0 +1,26 @@
+{
+  "update_type": "message_created",
+  "timestamp": 1795793162000,
+  "user_locale": "ru",
+  "message": {
+    "body": {
+      "mid": "mid.0000000023b232eb01a21d9d12982822",
+      "seq": 117689100724086000,
+      "text": "/start salon-a"
+    },
+    "sender": {
+      "name": "Александр",
+      "is_bot": false,
+      "user_id": 24678000,
+      "last_name": "",
+      "first_name": "Александр",
+      "last_activity_time": 1795793163000
+    },
+    "recipient": {
+      "chat_id": 598881000,
+      "user_id": 583705000,
+      "chat_type": "dialog"
+    },
+    "timestamp": 1795793162000
+  }
+}

@@ -1,9 +1,13 @@
+import json
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.db.session import get_db
 from app.main import create_app
 from app.models.catalog import Master, Service, ServiceMaster
+from app.models.outbox import OutboxMessage
 from app.models.tenant import Tenant
 from app.models.tenant_link import TenantLink
 from app.repositories.tenant_link_repository import hash_token
@@ -40,7 +44,6 @@ def test_callback_payload_routed_as_text(db_session):
     db_session.commit()
 
     client = _client_with_db(db_session)
-    # start via message
     r = client.post("/webhook/max", json={
         "update_type": "message_created",
         "timestamp": 1,
@@ -51,7 +54,6 @@ def test_callback_payload_routed_as_text(db_session):
     })
     assert r.status_code == 200
 
-    # callback variant: payload as text choice
     r = client.post("/webhook/max", json={
         "update_type": "message_callback",
         "timestamp": 2,
@@ -59,3 +61,20 @@ def test_callback_payload_routed_as_text(db_session):
     })
     assert r.status_code == 200
     process_pending_events(batch_size=50, db=db_session)
+
+
+def test_real_message_created_fixture_enqueues_dialog_reply(db_session):
+    tenant = Tenant(slug="salon-a", display_name="Salon A", status="active")
+    db_session.add(tenant)
+    db_session.commit()
+    payload = json.loads(
+        Path("tests/fixtures/max/message_created_real.masked.json").read_text(encoding="utf-8")
+    )
+    client = _client_with_db(db_session)
+    r = client.post("/webhook/max", json=payload)
+    assert r.status_code == 200
+    process_pending_events(batch_size=50, db=db_session)
+    # sender.user_id is the real recipient for direct MAX dialog replies
+    msgs = db_session.query(OutboxMessage).filter(OutboxMessage.chat_id == 598881000).all()
+    assert msgs
+    assert any("Меню" in (m.payload or {}).get("text", "") for m in msgs)
