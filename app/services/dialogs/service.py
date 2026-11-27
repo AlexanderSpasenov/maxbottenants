@@ -57,6 +57,12 @@ class DialogService:
             session = self.sessions.upsert(
                 chat_id=chat_id, max_user_id=max_user_id, current_step=sm.START, context={}
             )
+        # Keep max_user_id in context for response routing
+        sctx = dict(session.context or {})
+        if sctx.get("max_user_id") != max_user_id:
+            sctx["max_user_id"] = max_user_id
+            session.context = sctx
+            self.db.add(session)
 
         if text.startswith("/start"):
             return self._handle_start(session, chat_id, max_user_id, text)
@@ -85,7 +91,7 @@ class DialogService:
                         context={"tenant_slug": tenant.slug},
                     )
                     self.db.commit()
-                    return [self._menu_message(chat_id, tenant.display_name)]
+                    return [self._menu_message(chat_id, tenant.display_name, max_user_id)]
                 if link.link_type in {"owner", "admin"}:
                     member = self.members.get_by_tenant_user(tenant.id, max_user_id)
                     if member is None:
@@ -103,7 +109,7 @@ class DialogService:
                     )
                     self.db.commit()
                     return [{
-                        "chat_id": chat_id,
+                        "chat_id": chat_id, "user_id": max_user_id,
                         "text": (
                             f"Вы привязаны как владелец салона {tenant.display_name}."
                             " Команды: /confirm <booking_id>, /reject <booking_id>"
@@ -120,12 +126,12 @@ class DialogService:
                     context={"tenant_slug": tenant.slug},
                 )
                 self.db.commit()
-                return [self._menu_message(chat_id, tenant.display_name)]
+                return [self._menu_message(chat_id, tenant.display_name, max_user_id)]
 
         tenants = self.tenants.list_active()
         if not tenants:
             self.db.commit()
-            return [{"chat_id": chat_id, "text": "Сейчас нет доступных салонов."}]
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Сейчас нет доступных салонов."}]
         if len(tenants) == 1:
             tenant = tenants[0]
             self.customers.upsert(tenant_id=tenant.id, max_user_id=max_user_id)
@@ -137,7 +143,7 @@ class DialogService:
                 context={"tenant_slug": tenant.slug},
             )
             self.db.commit()
-            return [self._menu_message(chat_id, tenant.display_name)]
+            return [self._menu_message(chat_id, tenant.display_name, max_user_id)]
 
         session.current_step = sm.CHOOSE_TENANT
         session.context = {}
@@ -147,16 +153,19 @@ class DialogService:
         for i, t in enumerate(tenants, start=1):
             lines.append(f"{i}. {t.display_name} (/start {t.slug})")
         lines.append("Отправьте номер или /start <slug>.")
-        return [{"chat_id": chat_id, "text": "\n".join(lines)}]
+        return [{"chat_id": chat_id, "user_id": max_user_id, "text": "\n".join(lines)}]
 
-    def _menu_message(self, chat_id: int, tenant_name: str) -> dict[str, Any]:
-        return {
+    def _menu_message(self, chat_id: int, tenant_name: str, user_id: int | None = None) -> dict[str, Any]:
+        msg: dict[str, Any] = {
             "chat_id": chat_id,
             "text": (
                 f"Салон: {tenant_name}\n"
                 "Меню:\n1. Записаться\n2. Мои заявки\n\nОтправьте 1 или 2."
             ),
         }
+        if user_id is not None:
+            msg["user_id"] = user_id
+        return msg
 
     def _handle_text_step(self, session, chat_id: int, max_user_id: int, text: str):
         step = session.current_step or sm.START
@@ -171,14 +180,14 @@ class DialogService:
             session.context = {}
             self.db.add(session)
             self.db.commit()
-            return [{"chat_id": chat_id, "text": "Сессия устарела. /start"}]
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Сессия устарела. /start"}]
 
         if step == sm.MENU:
             if text == "1":
                 services = self.catalog.list_active_services(tenant.id)
                 if not services:
                     self.db.commit()
-                    return [{"chat_id": chat_id, "text": "В салоне пока нет активных услуг."}]
+                    return [{"chat_id": chat_id, "user_id": max_user_id, "text": "В салоне пока нет активных услуг."}]
                 ctx = {"tenant_slug": tenant.slug, "services": [str(s.id) for s in services]}
                 session.current_step = sm.CHOOSE_SERVICE
                 session.context = ctx
@@ -188,21 +197,21 @@ class DialogService:
                 for i, s in enumerate(services, start=1):
                     lines.append(f"{i}. {s.name} - {s.price}, {s.duration_minutes}m")
                 lines.append("Отправьте номер услуги.")
-                return [{"chat_id": chat_id, "text": "\n".join(lines)}]
+                return [{"chat_id": chat_id, "user_id": max_user_id, "text": "\n".join(lines)}]
             if text == "2":
                 bookings = self.bookings.list_for_user(tenant.id, max_user_id)
                 if not bookings:
                     self.db.commit()
-                    return [{"chat_id": chat_id, "text": "У вас пока нет заявок."}]
+                    return [{"chat_id": chat_id, "user_id": max_user_id, "text": "У вас пока нет заявок."}]
                 lines = ["Ваши заявки:"]
                 for b in bookings[:10]:
                     date = b.preferred_date or "-"
                     tr = b.preferred_time_range or ""
                     lines.append(f"- {b.id} | {b.status} | {date} {tr}")
                 self.db.commit()
-                return [{"chat_id": chat_id, "text": "\n".join(lines)}]
+                return [{"chat_id": chat_id, "user_id": max_user_id, "text": "\n".join(lines)}]
             self.db.commit()
-            return [self._menu_message(chat_id, tenant.display_name)]
+            return [self._menu_message(chat_id, tenant.display_name, max_user_id)]
 
         if step == sm.CHOOSE_SERVICE:
             return self._choose_service(session, tenant, chat_id, text, ctx)
@@ -215,7 +224,7 @@ class DialogService:
             if not normalized:
                 self.db.commit()
                 return [{
-                    "chat_id": chat_id,
+                    "chat_id": chat_id, "user_id": max_user_id,
                     "text": "Неверная дата. Формат YYYY-MM-DD, не в прошлом.",
                 }]
             ctx["preferred_date"] = normalized
@@ -225,14 +234,14 @@ class DialogService:
             session.context = ctx
             self.db.add(session)
             self.db.commit()
-            return [{"chat_id": chat_id, "text": "Укажите время (например 15:00-17:00)."}]
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Укажите время (например 15:00-17:00)."}]
         if step == sm.ENTER_TIME:
             normalized = self._normalize_time_range(text)
             if not normalized:
                 self.db.commit()
                 return [
                     {
-                        "chat_id": chat_id,
+                        "chat_id": chat_id, "user_id": max_user_id,
                         "text": "Неверное время. Формат HH:MM или HH:MM-HH:MM.",
                     }
                 ]
@@ -241,21 +250,21 @@ class DialogService:
             session.context = ctx
             self.db.add(session)
             self.db.commit()
-            return [{"chat_id": chat_id, "text": "Как вас зовут?"}]
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Как вас зовут?"}]
         if step == sm.ENTER_NAME:
             ctx["customer_name"] = text
             session.current_step = sm.ENTER_PHONE
             session.context = ctx
             self.db.add(session)
             self.db.commit()
-            return [{"chat_id": chat_id, "text": "Введите телефон для связи."}]
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Введите телефон для связи."}]
         if step == sm.ENTER_PHONE:
             phone = self._normalize_phone(text)
             if not phone:
                 self.db.commit()
                 return [
                     {
-                        "chat_id": chat_id,
+                        "chat_id": chat_id, "user_id": max_user_id,
                         "text": "Неверный телефон. Минимум 10 цифр.",
                     }
                 ]
@@ -264,7 +273,7 @@ class DialogService:
             session.context = ctx
             self.db.add(session)
             self.db.commit()
-            return [self._confirm_message(chat_id, ctx)]
+            return [self._confirm_message(chat_id, ctx, max_user_id)]
         if step == sm.CONFIRM:
             if text.lower() in {"1", "да", "yes", "ok", "подтвердить"}:
                 return self._create_booking(session, tenant, chat_id, max_user_id, ctx)
@@ -274,17 +283,17 @@ class DialogService:
                 self.db.add(session)
                 self.db.commit()
                 return [
-                    {"chat_id": chat_id, "text": "Заявка отменена."},
-                    self._menu_message(chat_id, tenant.display_name),
+                    {"chat_id": chat_id, "user_id": max_user_id, "text": "Заявка отменена."},
+                    self._menu_message(chat_id, tenant.display_name, max_user_id),
                 ]
             self.db.commit()
-            return [{"chat_id": chat_id, "text": "Отправьте 1 (да) или 2 (нет)."}]
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Отправьте 1 (да) или 2 (нет)."}]
 
         session.current_step = sm.MENU
         session.context = {"tenant_slug": tenant.slug}
         self.db.add(session)
         self.db.commit()
-        return [self._menu_message(chat_id, tenant.display_name)]
+        return [self._menu_message(chat_id, tenant.display_name, max_user_id)]
 
     def _choose_tenant(self, session, chat_id: int, max_user_id: int, text: str):
         tenants = self.tenants.list_active()
@@ -297,7 +306,7 @@ class DialogService:
             chosen = self.tenants.get_by_slug(text)
         if chosen is None:
             self.db.commit()
-            return [{"chat_id": chat_id, "text": "Отправьте номер или slug салона."}]
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Отправьте номер или slug салона."}]
         self.customers.upsert(tenant_id=chosen.id, max_user_id=max_user_id)
         self.sessions.upsert(
             chat_id=chat_id,
@@ -307,21 +316,21 @@ class DialogService:
             context={"tenant_slug": chosen.slug},
         )
         self.db.commit()
-        return [self._menu_message(chat_id, chosen.display_name)]
+        return [self._menu_message(chat_id, chosen.display_name, max_user_id)]
 
     def _choose_service(self, session, tenant, chat_id: int, text: str, ctx: dict[str, Any]):
         service_ids = [uuid.UUID(s) for s in ctx.get("services", [])]
         if not text.isdigit():
             self.db.commit()
-            return [{"chat_id": chat_id, "text": "Отправьте номер услуги."}]
+            return [{"chat_id": chat_id, "user_id": uid, "text": "Отправьте номер услуги."}]
         idx = int(text) - 1
         if idx < 0 or idx >= len(service_ids):
             self.db.commit()
-            return [{"chat_id": chat_id, "text": "Неверный номер услуги."}]
+            return [{"chat_id": chat_id, "user_id": uid, "text": "Неверный номер услуги."}]
         service = self.catalog.get_service(tenant.id, service_ids[idx])
         if service is None:
             self.db.commit()
-            return [{"chat_id": chat_id, "text": "Услуга не найдена. /start"}]
+            return [{"chat_id": chat_id, "user_id": uid, "text": "Услуга не найдена. /start"}]
         masters = self.catalog.list_service_masters(tenant.id, service.id)
         ctx["service_id"] = str(service.id)
         ctx["service_name"] = service.name
@@ -337,13 +346,13 @@ class DialogService:
             lines.append(f"{i}. {m.display_name}")
         lines.append(f"{len(masters) + 1}. Любой мастер")
         lines.append("Отправьте номер.")
-        return [{"chat_id": chat_id, "text": "\n".join(lines)}]
+        return [{"chat_id": chat_id, "user_id": uid, "text": "\n".join(lines)}]
 
     def _choose_master(self, session, tenant, chat_id: int, text: str, ctx: dict[str, Any]):
         masters = [uuid.UUID(m) for m in ctx.get("masters", [])]
         if not text.isdigit():
             self.db.commit()
-            return [{"chat_id": chat_id, "text": "Отправьте номер мастера."}]
+            return [{"chat_id": chat_id, "user_id": uid, "text": "Отправьте номер мастера."}]
         idx = int(text) - 1
         if idx == len(masters):
             ctx["master_id"] = None
@@ -355,17 +364,17 @@ class DialogService:
             ctx["master_name"] = master.display_name if master else "Мастер"
         else:
             self.db.commit()
-            return [{"chat_id": chat_id, "text": "Неверный номер мастера."}]
+            return [{"chat_id": chat_id, "user_id": uid, "text": "Неверный номер мастера."}]
         session.current_step = sm.ENTER_DATE
         session.context = ctx
         self.db.add(session)
         self.db.commit()
         if tenant.booking_mode == "online_booking" and not ctx.get("master_id"):
             return [{
-                "chat_id": chat_id,
+                "chat_id": chat_id, "user_id": uid,
                 "text": "Для online_booking выберите конкретного мастера.",
             }]
-        return [{"chat_id": chat_id, "text": "Укажите дату (например 2026-11-30)."}]
+        return [{"chat_id": chat_id, "user_id": uid, "text": "Укажите дату (например 2026-11-30)."}]
 
     def _show_slots(self, session, tenant, chat_id: int, ctx: dict):
         from datetime import date as date_type
@@ -376,18 +385,18 @@ class DialogService:
         if master_id is None:
             self.db.commit()
             return [{
-                "chat_id": chat_id,
+                "chat_id": chat_id, "user_id": uid,
                 "text": "Для online_booking выберите конкретного мастера.",
             }]
         service = self.catalog.get_service(tenant.id, uuid.UUID(ctx["service_id"]))
         if service is None:
             self.db.commit()
-            return [{"chat_id": chat_id, "text": "Услуга не найдена. /start"}]
+            return [{"chat_id": chat_id, "user_id": uid, "text": "Услуга не найдена. /start"}]
         try:
             pref_day = date_type.fromisoformat(ctx["preferred_date"])
         except Exception:
             self.db.commit()
-            return [{"chat_id": chat_id, "text": "Неверная дата."}]
+            return [{"chat_id": chat_id, "user_id": uid, "text": "Неверная дата."}]
         slots = get_available_slots(
             db=self.db,
             tenant_id=tenant.id,
@@ -404,7 +413,7 @@ class DialogService:
         if not slots:
             self.db.commit()
             return [{
-                "chat_id": chat_id,
+                "chat_id": chat_id, "user_id": uid,
                 "text": "Нет свободных слотов на эту дату. Введите другую дату YYYY-MM-DD.",
             }]
         ctx["slots"] = [s.start.isoformat() for s in slots]
@@ -417,16 +426,16 @@ class DialogService:
             local = s.start.astimezone(tz)
             lines.append(f"{i}. {local.strftime('%Y-%m-%d %H:%M')}")
         lines.append("Отправьте номер слота.")
-        return [{"chat_id": chat_id, "text": "\n".join(lines)}]
+        return [{"chat_id": chat_id, "user_id": uid, "text": "\n".join(lines)}]
     def _choose_slot(self, session, tenant, chat_id: int, max_user_id: int, text: str, ctx: dict):
         slots = ctx.get("slots") or []
         if not text.isdigit():
             self.db.commit()
-            return [{"chat_id": chat_id, "text": "Отправьте номер слота."}]
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Отправьте номер слота."}]
         idx = int(text) - 1
         if idx < 0 or idx >= len(slots):
             self.db.commit()
-            return [{"chat_id": chat_id, "text": "Неверный номер слота."}]
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Неверный номер слота."}]
         ctx["slot_start"] = slots[idx]
         tz = __import__('zoneinfo').ZoneInfo(tenant.timezone)
         local_dt = __import__('datetime').datetime.fromisoformat(slots[idx])
@@ -437,8 +446,8 @@ class DialogService:
         session.context = ctx
         self.db.add(session)
         self.db.commit()
-        return [{"chat_id": chat_id, "text": "Как вас зовут?"}]
-    def _confirm_message(self, chat_id: int, ctx: dict[str, Any]) -> dict[str, Any]:
+        return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Как вас зовут?"}]
+    def _confirm_message(self, chat_id: int, ctx: dict[str, Any], user_id: int | None = None) -> dict[str, Any]:
         text = (
             "Проверьте заявку:\n"
             f"Услуга: {ctx.get('service_name')}\n"
@@ -449,7 +458,10 @@ class DialogService:
             f"Телефон: {mask_phone(ctx.get('customer_phone'))}\n\n"
             "1. Подтвердить\n2. Отмена"
         )
-        return {"chat_id": chat_id, "text": text}
+        msg: dict[str, Any] = {"chat_id": chat_id, "user_id": max_user_id, "text": text}
+        if user_id is not None:
+            msg["user_id"] = user_id
+        return msg
 
     def _create_booking(self, session, tenant, chat_id: int, max_user_id: int, ctx: dict):
         phone = str(ctx.get("customer_phone") or "")
@@ -486,7 +498,7 @@ class DialogService:
                 self.db.add(session)
                 self.db.commit()
                 return [{
-                    "chat_id": chat_id,
+                    "chat_id": chat_id, "user_id": max_user_id,
                     "text": "Этот слот уже занят. Выберите другую дату/время.",
                 }]
 
@@ -518,7 +530,7 @@ class DialogService:
             self.db.add(session)
             self.db.commit()
             return [{
-                "chat_id": chat_id,
+                "chat_id": chat_id, "user_id": max_user_id,
                 "text": "Этот слот уже занят. Выберите другую дату/время.",
             }]
         self.customers.upsert(
@@ -547,7 +559,7 @@ class DialogService:
             )
         else:
             client_text = f"Заявка #{booking.id} создана. Статус: ожидает подтверждения салона."
-        client_msg = {"chat_id": chat_id, "text": client_text}
+        client_msg = {"chat_id": chat_id, "user_id": max_user_id, "text": client_text}
         return [client_msg, *owner_msgs]
 
     def _notify_owners(self, tenant_id: uuid.UUID, booking: Booking, ctx: dict):
@@ -567,10 +579,10 @@ class DialogService:
             self.outbox.enqueue(
                 tenant_id=tenant_id,
                 chat_id=owner.max_user_id,
-                payload={"text": text},
+                payload={"text": text, "user_id": owner.max_user_id},
                 dedupe_key=f"booking:{booking.id}:owner_notify:{owner.max_user_id}",
             )
-            msgs.append({"chat_id": owner.max_user_id, "text": text, "queued": True})
+            msgs.append({"chat_id": owner.max_user_id, "user_id": owner.max_user_id, "text": text, "queued": True})
         return msgs
 
     def _handle_owner_command(self, chat_id: int, max_user_id: int, text: str):
@@ -581,15 +593,15 @@ class DialogService:
         try:
             booking_id = uuid.UUID(booking_id_raw)
         except ValueError:
-            return [{"chat_id": chat_id, "text": "Некорректный ID заявки."}]
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Некорректный ID заявки."}]
 
         booking = self.bookings.get_by_id(booking_id)
         if booking is None:
-            return [{"chat_id": chat_id, "text": "Заявка не найдена."}]
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Заявка не найдена."}]
 
         member = self.members.get_by_tenant_user(booking.tenant_id, max_user_id)
         if member is None or member.role != "owner":
-            return [{"chat_id": chat_id, "text": "Недостаточно прав."}]
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Недостаточно прав."}]
 
         # Atomic status transition for idempotent owner commands.
         from_statuses = ["awaiting_salon", "pending_confirmation"]
@@ -605,7 +617,7 @@ class DialogService:
                 break
         if updated is None:
             self.db.refresh(booking)
-            return [{"chat_id": chat_id, "text": f"Заявка уже обработана: {booking.status}"}]
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": f"Заявка уже обработана: {booking.status}"}]
         booking = updated
         new_status = booking.status
 
@@ -615,12 +627,14 @@ class DialogService:
             else f"Заявка #{booking.id} отклонена салоном. Выберите другое время /start."
         )
         self.outbox.enqueue(
-            tenant_id=booking.tenant_id, chat_id=booking.chat_id, payload={"text": client_text}
+            tenant_id=booking.tenant_id,
+            chat_id=booking.chat_id,
+            payload={"text": client_text, "user_id": booking.max_user_id},
         )
 
         owner_text = f"Заявка #{booking.id} переведена в статус {new_status}."
         return [
-            {"chat_id": chat_id, "text": owner_text},
+            {"chat_id": chat_id, "user_id": max_user_id, "text": owner_text},
             {"chat_id": booking.chat_id, "text": client_text, "queued": True},
         ]
 

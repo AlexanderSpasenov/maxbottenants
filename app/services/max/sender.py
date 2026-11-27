@@ -20,18 +20,15 @@ def get_max_client():
 async def send_text(chat_id: int | str, text: str, **kwargs: Any) -> dict[str, Any]:
     client = get_max_client()
     logger.info("Sending MAX message to chat_id=%s", chat_id)
-    # MAX Bot API requires user_id/chat_id query param for direct/dialog messages.
-    # For current prototype we map dialog chat_id to user_id when they match.
+    # MAX Bot API requires user_id/chat_id query param.
+    # Prefer explicit user_id (dialog recipient). Do NOT guess chat_id as user_id:
+    # dialog chat_id differs from sender user_id and causes silent misdelivery.
     send_kwargs = dict(kwargs)
     target_user_id = send_kwargs.pop("user_id", None) or send_kwargs.pop("max_user_id", None)
     target_chat_id = send_kwargs.pop("chat_id", None)
-    # Heuristic: if only chat_id known and looks like dialog recipient id, also try user_id.
     if target_user_id is None and target_chat_id is None:
-        try:
-            cid = int(chat_id)
-            target_user_id = cid
-        except Exception:
-            pass
+        # Backward compatibility for legacy outbox rows without user_id/chat_id.
+        target_user_id = chat_id
     params = {}
     if target_user_id is not None:
         params["user_id"] = str(target_user_id)
