@@ -34,7 +34,9 @@ def test_callback_payload_routed_as_text(db_session):
     db_session.add_all([s, m])
     db_session.flush()
     db_session.add(ServiceMaster(tenant_id=t.id, service_id=s.id, master_id=m.id, is_active=True))
-    db_session.add(TenantLink(tenant_id=t.id, token_hash=hash_token("cb-token"), link_type="client"))
+    db_session.add(
+        TenantLink(tenant_id=t.id, token_hash=hash_token("cb-token"), link_type="client")
+    )
     db_session.commit()
 
     client = _client_with_db(db_session)
