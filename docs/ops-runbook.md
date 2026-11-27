@@ -66,6 +66,8 @@ Checklist перед пилотом:
 
 ## MAX E2E checklist (когда появятся credentials)
 
+См. `docs/max-contract-capture.md` и `tests/fixtures/max/` для masked fixtures.
+
 - Получить `MAX_BOT_TOKEN`, `MAX_WEBHOOK_SECRET`, реальный формат webhook/callback/button payload.
 - Настроить временный HTTPS tunnel и webhook URL.
 - Прогнать E2E на 2 тестовых салонах: `/start` по deep link, request_only создание заявки, owner confirm/reject, online_booking hold/confirm/expiry, callback buttons.

@@ -1,0 +1,26 @@
+﻿{
+  "note": "MASKED EXAMPLE. Replace with real captured payloads; remove secrets/PII before commit.",
+  "captured_at": "YYYY-MM-DDTHH:MM:SSZ",
+  "tenant_slug": "demo-a",
+  "http": {
+    "method": "POST",
+    "path": "/webhook/max/demo-a",
+    "headers": {
+      "X-Max-Signature": "<masked>",
+      "Content-Type": "application/json"
+    }
+  },
+  "body": {
+    "event_type": "message_created",
+    "message": {
+      "id": "<msg-id>",
+      "chat_id": "<chat-id>",
+      "sender_id": "<user-id>",
+      "text": "/start"
+    }
+  },
+  "expected": {
+    "status": 200,
+    "side_effect": "create/route tenant event"
+  }
+}

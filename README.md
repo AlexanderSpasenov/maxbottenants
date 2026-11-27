@@ -81,7 +81,7 @@ docker compose exec -T -e TEST_DATABASE_URL=postgresql+psycopg://maxbot:maxbot@p
 - PII key rotation/retention/deletion policy не финализированы (операционный/legal процесс). Технически PII шифруется `APP_SECRET_KEY`, секреты не пишутся в audit summary; процессный draft: `docs/pii-request-runbook.md`.
 - Admin auth — shared secret; есть опциональный IP allowlist и audit log, но для пилота нужен RBAC/SSO/полноценный аудит.
 - Google Sheets реальный API не подключен; есть CSV/fixture skeleton.
-- Monitoring/alerting/TLS/reverse proxy в прод-инфре не внедрены; есть runbook/шаблоны (`docs/ops-runbook.md`, `docs/pilot-readiness.md`, `scripts/backup_postgres.sh`, `scripts/pilot_readiness_check.sh`, `docker-compose.proxy.yml`). Backup/restore drill на `*_test` выполнен.
+- Monitoring/alerting/TLS/reverse proxy в прод-инфре не внедрены; есть runbook/шаблоны (`docs/ops-runbook.md`, `docs/pilot-readiness.md`, `docs/max-contract-capture.md`, `scripts/backup_postgres.sh`, `scripts/pilot_readiness_check.sh`, `docker-compose.proxy.yml`). Backup/restore drill на `*_test` выполнен.
 
 ## Структура
 

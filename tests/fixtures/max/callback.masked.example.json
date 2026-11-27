@@ -1,0 +1,26 @@
+﻿{
+  "note": "MASKED EXAMPLE. Replace with real captured payloads; remove secrets/PII before commit.",
+  "captured_at": "YYYY-MM-DDTHH:MM:SSZ",
+  "tenant_slug": "demo-a",
+  "http": {
+    "method": "POST",
+    "path": "/webhook/max/demo-a",
+    "headers": {
+      "X-Max-Signature": "<masked>",
+      "Content-Type": "application/json"
+    }
+  },
+  "body": {
+    "event_type": "callback",
+    "callback": {
+      "id": "<callback-id>",
+      "chat_id": "<chat-id>",
+      "sender_id": "<owner-id>",
+      "data": "booking:confirm:<id>"
+    }
+  },
+  "expected": {
+    "status": 200,
+    "side_effect": "owner confirm/reject flow"
+  }
+}
