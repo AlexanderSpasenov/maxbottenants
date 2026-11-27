@@ -29,22 +29,28 @@ Env:
 
 Worker периодически запускает cleanup (dry_run=false) с этими настройками. Для ручной проверки используйте POST /admin/cleanup с dry_run=true.
 
-## Backup / restore checklist
+## Backup / restore
 
-Перед пилотом:
+Скрипты (safe defaults):
 
-- Включить регулярный pg_dump/snapshot PostgreSQL; хранить вне app-контейнера.
-- Проверить restore на тестовой БД (*_test/staging), не на production.
-- Бэкапить .env/secrets через secret manager или защищённое хранилище, не в git.
-- Учитывать, что PII в customer_profiles зашифрована APP_SECRET_KEY; потеря ключа делает PII нечитаемой.
+- `scripts/backup_postgres.sh [output_dir]` — `pg_dump | gzip` из docker compose postgres.
+- `scripts/restore_postgres_to_test.sh <backup.sql.gz> [test_db_name]` — восстановление **только** в БД, имя которой содержит `test`; отказывается работать с non-test именем.
 
-## TLS / reverse proxy checklist
+Checklist перед пилотом:
+
+- Включить регулярный backup (cron/systemd timer) + хранение вне app-контейнера.
+- Проверять restore drill на `*_test`/staging, не на production.
+- Бэкапить `.env`/secrets через secret manager или защищённое хранилище, не в git.
+- Учитывать, что PII в `customer_profiles` зашифрована `APP_SECRET_KEY`; потеря ключа делает PII нечитаемой.
+## TLS / reverse proxy
+
+Шаблоны: `docker-compose.proxy.yml` + `deploy/nginx/maxbottenants.conf.example`.
 
 - Публиковать app только через reverse proxy (nginx/caddy/traefik) с TLS.
 - Наружу открывать только 80/443; app/postgres/redis оставить на internal/private интерфейсах.
 - Для MAX webhook нужен публичный HTTPS URL; до реального контракта использовать временный tunnel только для теста.
 - Ограничить размер body, rate limit, IP allowlist/Basic auth для admin endpoints на proxy-уровне до внедрения RBAC.
-
+- Перед включением профиля proxy проверить cert paths, server_name, allow/deny для `/admin/`.
 ## PII policy draft (ограничения MVP)
 
 - PII (customer_profiles) шифруется на уровне приложения через APP_SECRET_KEY.

@@ -80,7 +80,7 @@ docker compose exec -T -e TEST_DATABASE_URL=postgresql+psycopg://maxbot:maxbot@p
 - PII key rotation/retention/deletion policy не финализированы.
 - Admin auth — shared secret; есть опциональный IP allowlist и audit log, но для пилота нужен RBAC/SSO/полноценный аудит.
 - Google Sheets реальный API не подключен; есть CSV/fixture skeleton.
-- Нет полноценного monitoring/alerting/backup/TLS/reverse proxy runbook в прод-инфре; см. `docs/ops-runbook.md`.
+- Monitoring/alerting/backup/TLS/reverse proxy в прод-инфре не внедрены; есть runbook и шаблоны (`docs/ops-runbook.md`, `scripts/backup_postgres.sh`, `docker-compose.proxy.yml`).
 
 ## Структура
 
