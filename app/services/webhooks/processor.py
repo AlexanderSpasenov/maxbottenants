@@ -34,6 +34,25 @@ class WebhookEventProcessor:
                 len(responses),
                 event.event_key,
             )
+            if responses:
+                from app.repositories.outbox_repository import OutboxRepository
+                outbox = OutboxRepository(self.db)
+                for resp in responses:
+                    chat_id = resp.get("chat_id")
+                    text = resp.get("text")
+                    if not chat_id or not text:
+                        continue
+                    payload = {"text": text}
+                    for k, v in resp.items():
+                        if k not in {"chat_id", "text"}:
+                            payload[k] = v
+                    dedupe = f"webhook:{event.event_key}:reply:{chat_id}:{hash(text)}"
+                    outbox.enqueue(
+                        tenant_id=None,
+                        chat_id=int(chat_id),
+                        payload=payload,
+                        dedupe_key=dedupe,
+                    )
             self.repo.mark_processed(event)
         except Exception as exc:
             logger.exception("Webhook event processing failed: %s", event.event_key)

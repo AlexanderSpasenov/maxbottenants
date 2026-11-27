@@ -24,11 +24,15 @@ class RealMaxClient(MaxClient):
         return {"Authorization": self.token}
 
     async def send_message(self, chat_id: int | str, text: str, **kwargs: Any) -> dict[str, Any]:
+        params = kwargs.pop("params", None) or {}
+        # MAX API expects user_id or chat_id as query param; prefer explicit params.
+        if "user_id" not in params and "chat_id" not in params:
+            params["user_id"] = str(chat_id)
         async with httpx.AsyncClient(base_url=self.base_url, timeout=10.0) as client:
             response = await client.post(
                 "/messages",
                 headers=self._headers(),
-                params={"chat_id": str(chat_id)},
+                params=params,
                 json={"text": text, **kwargs},
             )
             response.raise_for_status()
