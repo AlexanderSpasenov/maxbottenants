@@ -53,10 +53,10 @@ def test_admin_audit_log_for_sync_and_requeue(db_session, monkeypatch):
     actions = [l.action for l in logs]
     assert "sync.csv" in actions
     assert "outbox.requeue" in actions
-    for l in logs:
-        assert l.status in {"ok", "failed"}
+    for log_row in logs:
+        assert log_row.status in {"ok", "failed"}
         # secret must never be stored
-        dumped = str(l.request_summary or "") + str(l.error or "")
+        dumped = str(log_row.request_summary or "") + str(log_row.error or "")
         assert "test-admin-secret" not in dumped
 
     r = client.get("/admin/audit?tenant_slug=audit-a&limit=50", headers=headers)
@@ -198,7 +198,10 @@ def test_retention_cleanup_dry_run_and_actual(db_session, monkeypatch):
     assert "dead" in statuses
     assert len([m for m in db_session.query(OutboxMessage).all() if m.status == "sent"]) == 1
     assert db_session.query(WebhookEvent).filter_by(event_key="old-processed").first() is None
-    assert db_session.query(WebhookEvent).filter_by(event_key="recent-processed").first() is not None
+    assert (
+        db_session.query(WebhookEvent).filter_by(event_key="recent-processed").first()
+        is not None
+    )
     assert db_session.query(WebhookEvent).filter_by(event_key="failed-old").first() is not None
     assert db_session.query(SyncLog).count() == 1
 

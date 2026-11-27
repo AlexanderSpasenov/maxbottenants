@@ -326,7 +326,9 @@ def get_admin_audit(
         if tenant is None:
             raise HTTPException(status_code=404, detail="Tenant not found")
         tenant_id = tenant.id
-    rows = AdminAuditLogRepository(db).list(tenant_id=tenant_id, tenant_slug=tenant_slug, limit=limit)
+    rows = AdminAuditLogRepository(db).list(
+        tenant_id=tenant_id, tenant_slug=tenant_slug, limit=limit
+    )
     return {
         "tenant_slug": tenant_slug,
         "audit": [
@@ -374,7 +376,9 @@ def get_admin_stats(
     for key in ["ok", "failed", "running"]:
         sync_logs.setdefault(key, 0)
 
-    oldest_dead_stmt = select(func.min(OutboxMessage.scheduled_at)).where(OutboxMessage.status == "dead")
+    oldest_dead_stmt = select(func.min(OutboxMessage.scheduled_at)).where(
+        OutboxMessage.status == "dead"
+    )
     if tenant_id is not None:
         oldest_dead_stmt = oldest_dead_stmt.where(OutboxMessage.tenant_id == tenant_id)
     oldest_dead = db.scalar(oldest_dead_stmt)
