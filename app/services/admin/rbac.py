@@ -79,7 +79,9 @@ def resolve_admin_principal(
             raise HTTPException(status_code=403, detail="Admin IP not allowed")
 
     if not settings.admin_rbac_enabled:
-        return AdminPrincipal(subject="shared-secret", role="platform_admin", auth_mode="shared_secret")
+        return AdminPrincipal(
+            subject="shared-secret", role="platform_admin", auth_mode="shared_secret"
+        )
 
     role = (x_admin_role or settings.admin_rbac_default_role or "").strip()
     if role not in ROLE_PERMISSIONS:
