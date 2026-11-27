@@ -89,11 +89,16 @@ def process_outbox_messages(batch_size: int = 100, max_attempts: int = 5) -> int
         sent = 0
         for msg in messages:
             try:
-                text = str((msg.payload or {}).get("text") or "")
+                payload = msg.payload or {}
+                text = str(payload.get("text") or "")
                 if not text:
                     repo.mark_failed(msg, "empty payload.text", max_attempts=max_attempts)
                     continue
-                asyncio.run(send_text(msg.chat_id, text))
+                send_kwargs = {}
+                for k in ("user_id", "chat_id", "attachments", "format", "notify", "disable_link_preview"):
+                    if k in payload and payload[k] is not None:
+                        send_kwargs[k] = payload[k]
+                asyncio.run(send_text(msg.chat_id, text, **send_kwargs))
                 repo.mark_sent(msg)
                 sent += 1
             except Exception as exc:

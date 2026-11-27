@@ -77,5 +77,7 @@ def test_real_message_created_fixture_enqueues_dialog_reply(db_session):
     # sender.user_id is the real recipient for direct MAX dialog replies
     msgs = db_session.query(OutboxMessage).filter(OutboxMessage.chat_id == 598881000).all()
     assert msgs
-    reply = next(m for m in msgs if "Меню" in (m.payload or {}).get("text", ""))
+    reply = next(m for m in msgs if "Салон" in (m.payload or {}).get("text", ""))
     assert (reply.payload or {}).get("user_id") == 24678000
+    atts = (reply.payload or {}).get("attachments") or []
+    assert atts and atts[0].get("type") == "inline_keyboard"

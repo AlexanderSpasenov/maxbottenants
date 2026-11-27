@@ -150,18 +150,29 @@ class DialogService:
         self.db.add(session)
         self.db.commit()
         lines = ["Выберите салон:"]
+        rows = []
         for i, t in enumerate(tenants, start=1):
             lines.append(f"{i}. {t.display_name} (/start {t.slug})")
-        lines.append("Отправьте номер или /start <slug>.")
-        return [{"chat_id": chat_id, "user_id": max_user_id, "text": "\n".join(lines)}]
+            rows.append([(f"{i}. {t.display_name}", str(i))])
+        return [{"chat_id": chat_id, "user_id": max_user_id, "text": "\n".join(lines), "attachments": [self._kb(rows)]}]
+
+    @staticmethod
+    def _kb(rows: list[list[tuple[str, str]]]) -> dict[str, Any]:
+        return {
+            "type": "inline_keyboard",
+            "payload": {
+                "buttons": [
+                    [{"type": "callback", "text": text, "payload": payload} for text, payload in row]
+                    for row in rows
+                ]
+            },
+        }
 
     def _menu_message(self, chat_id: int, tenant_name: str, user_id: int | None = None) -> dict[str, Any]:
         msg: dict[str, Any] = {
             "chat_id": chat_id,
-            "text": (
-                f"Салон: {tenant_name}\n"
-                "Меню:\n1. Записаться\n2. Мои заявки\n\nОтправьте 1 или 2."
-            ),
+            "text": f"Салон: {tenant_name}\nВыберите действие:",
+            "attachments": [self._kb([[("Записаться", "1"), ("Мои заявки", "2")]])],
         }
         if user_id is not None:
             msg["user_id"] = user_id
@@ -194,10 +205,11 @@ class DialogService:
                 self.db.add(session)
                 self.db.commit()
                 lines = ["Выберите услугу:"]
-                for i, s in enumerate(services, start=1):
-                    lines.append(f"{i}. {s.name} - {s.price}, {s.duration_minutes}m")
-                lines.append("Отправьте номер услуги.")
-                return [{"chat_id": chat_id, "user_id": max_user_id, "text": "\n".join(lines)}]
+                rows = []
+                for i, svc in enumerate(services, start=1):
+                    lines.append(f"{i}. {svc.name} - {svc.price}, {svc.duration_minutes}m")
+                    rows.append([(f"{i}. {svc.name[:40]}", str(i))])
+                return [{"chat_id": chat_id, "user_id": max_user_id, "text": "\n".join(lines), "attachments": [self._kb(rows)]}]
             if text == "2":
                 bookings = self.bookings.list_for_user(tenant.id, max_user_id)
                 if not bookings:
@@ -318,7 +330,8 @@ class DialogService:
         self.db.commit()
         return [self._menu_message(chat_id, chosen.display_name, max_user_id)]
 
-    def _choose_service(self, session, tenant, chat_id: int, text: str, ctx: dict[str, Any]):
+    def _choose_service(self, session, tenant, chat_id: int, text: str, ctx: dict[str, Any], user_id: int | None = None):
+        uid = user_id or ctx.get("max_user_id")
         service_ids = [uuid.UUID(s) for s in ctx.get("services", [])]
         if not text.isdigit():
             self.db.commit()
@@ -342,13 +355,20 @@ class DialogService:
         self.db.add(session)
         self.db.commit()
         lines = ["Выберите мастера:"]
-        for i, m in enumerate(masters, start=1):
-            lines.append(f"{i}. {m.display_name}")
-        lines.append(f"{len(masters) + 1}. Любой мастер")
-        lines.append("Отправьте номер.")
-        return [{"chat_id": chat_id, "user_id": uid, "text": "\n".join(lines)}]
+        rows = []
+        active = self.catalog.list_active_masters(tenant.id)
+        for i, mid in enumerate(masters, start=1):
+            master = next((m for m in active if m.id == mid), None)
+            name = master.display_name if master else "Мастер"
+            lines.append(f"{i}. {name}")
+            rows.append([(f"{i}. {name[:40]}", str(i))])
+        any_idx = str(len(masters) + 1)
+        lines.append(f"{any_idx}. Любой мастер")
+        rows.append([(f"{any_idx}. Любой мастер", any_idx)])
+        return [{"chat_id": chat_id, "user_id": uid, "text": "\n".join(lines), "attachments": [self._kb(rows)]}]
 
-    def _choose_master(self, session, tenant, chat_id: int, text: str, ctx: dict[str, Any]):
+    def _choose_master(self, session, tenant, chat_id: int, text: str, ctx: dict[str, Any], user_id: int | None = None):
+        uid = user_id or ctx.get("max_user_id")
         masters = [uuid.UUID(m) for m in ctx.get("masters", [])]
         if not text.isdigit():
             self.db.commit()
@@ -422,11 +442,13 @@ class DialogService:
         self.db.add(session)
         self.db.commit()
         lines = ["Выберите слот:"]
-        for i, s in enumerate(slots, start=1):
-            local = s.start.astimezone(tz)
-            lines.append(f"{i}. {local.strftime('%Y-%m-%d %H:%M')}")
-        lines.append("Отправьте номер слота.")
-        return [{"chat_id": chat_id, "user_id": uid, "text": "\n".join(lines)}]
+        rows = []
+        for i, sl in enumerate(slots, start=1):
+            local = sl.start.astimezone(tz)
+            label = local.strftime('%Y-%m-%d %H:%M')
+            lines.append(f"{i}. {label}")
+            rows.append([(f"{i}. {label}", str(i))])
+        return [{"chat_id": chat_id, "user_id": uid, "text": "\n".join(lines), "attachments": [self._kb(rows)]}]
     def _choose_slot(self, session, tenant, chat_id: int, max_user_id: int, text: str, ctx: dict):
         slots = ctx.get("slots") or []
         if not text.isdigit():
@@ -455,10 +477,13 @@ class DialogService:
             f"Дата: {ctx.get('preferred_date')}\n"
             f"Время: {ctx.get('preferred_time_range')}\n"
             f"Имя: {ctx.get('customer_name')}\n"
-            f"Телефон: {mask_phone(ctx.get('customer_phone'))}\n\n"
-            "1. Подтвердить\n2. Отмена"
+            f"Телефон: {mask_phone(ctx.get('customer_phone'))}"
         )
-        msg: dict[str, Any] = {"chat_id": chat_id, "user_id": max_user_id, "text": text}
+        msg: dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": text,
+            "attachments": [self._kb([[("Подтвердить", "1"), ("Отмена", "2")]])],
+        }
         if user_id is not None:
             msg["user_id"] = user_id
         return msg
