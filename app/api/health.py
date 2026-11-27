@@ -9,11 +9,13 @@ from app.db.session import get_db
 router = APIRouter(tags=["health"])
 
 
+@router.get("/health")
 @router.get("/health/live")
 def live() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@router.get("/ready")
 @router.get("/health/ready")
 def ready(
     db: Session = Depends(get_db),
