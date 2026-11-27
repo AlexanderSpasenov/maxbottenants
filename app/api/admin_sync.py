@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -11,10 +12,13 @@ from app.db.session import get_db
 from app.integrations.sheets.csv_source import CsvCatalogSource
 from app.models.sync_log import SyncLog
 from app.models.tenant import Tenant
+from app.repositories.admin_audit_log_repository import AdminAuditLogRepository
 from app.repositories.outbox_repository import OutboxRepository
+from app.services.admin.retention import RetentionService
 from app.services.sync.catalog_sync import CatalogSyncService
 
-router = APIRouter(tags=["admin-sync"])
+logger = logging.getLogger(__name__)
+router = APIRouter(tags=["admin"])
 
 
 def require_admin_sync_secret(x_admin_sync_secret: str | None = Header(default=None)) -> None:
@@ -26,6 +30,27 @@ def require_admin_sync_secret(x_admin_sync_secret: str | None = Header(default=N
         raise HTTPException(status_code=401, detail="Invalid admin sync secret")
 
 
+def _safe_sync_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "mode": str(payload.get("mode") or "upsert_only"),
+        "has_base_dir": bool(str(payload.get("base_dir") or "").strip()),
+        "has_catalog": isinstance(payload.get("catalog"), dict),
+    }
+    catalog = payload.get("catalog")
+    if isinstance(catalog, dict):
+        for key in [
+            "services",
+            "masters",
+            "service_masters",
+            "master_working_hours",
+            "schedule_exceptions",
+        ]:
+            val = catalog.get(key)
+            if isinstance(val, list):
+                summary[f"{key}_count"] = len(val)
+    return summary
+
+
 @router.post("/admin/sync/{tenant_slug}/csv")
 async def sync_tenant_csv(
     tenant_slug: str,
@@ -33,15 +58,33 @@ async def sync_tenant_csv(
     db: Session = Depends(get_db),
     _: None = Depends(require_admin_sync_secret),
 ) -> dict[str, Any]:
+    audit = AdminAuditLogRepository(db)
     base_dir = str(payload.get("base_dir") or "").strip()
     if not base_dir and not isinstance(payload.get("catalog"), dict):
+        audit.log(
+            action="sync.csv",
+            status="failed",
+            tenant_slug=tenant_slug,
+            request_summary=_safe_sync_summary(payload),
+            error="base_dir or catalog is required",
+        )
+        db.commit()
         raise HTTPException(status_code=400, detail="base_dir or catalog is required")
 
     tenant = db.query(Tenant).filter(Tenant.slug == tenant_slug).first()
     if tenant is None:
+        audit.log(
+            action="sync.csv",
+            status="failed",
+            tenant_slug=tenant_slug,
+            request_summary=_safe_sync_summary(payload),
+            error="Tenant not found",
+        )
+        db.commit()
         raise HTTPException(status_code=404, detail="Tenant not found")
 
     mode = str(payload.get("mode") or "upsert_only").strip().lower()
+    summary = _safe_sync_summary(payload)
     if isinstance(payload.get("catalog"), dict):
         catalog = payload["catalog"]
     else:
@@ -50,8 +93,41 @@ async def sync_tenant_csv(
 
     try:
         log = CatalogSyncService(db).sync_tenant_catalog(tenant.id, catalog, mode=mode)
+        audit.log(
+            action="sync.csv",
+            status="ok" if log.status == "ok" else "failed",
+            tenant_id=tenant.id,
+            tenant_slug=tenant_slug,
+            request_summary=summary,
+            error=log.error_message,
+        )
+        db.commit()
     except ValueError as exc:
+        db.rollback()
+        audit.log(
+            action="sync.csv",
+            status="failed",
+            tenant_id=tenant.id,
+            tenant_slug=tenant_slug,
+            request_summary=summary,
+            error=str(exc),
+        )
+        db.commit()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Admin sync failed tenant=%s", tenant_slug)
+        audit.log(
+            action="sync.csv",
+            status="failed",
+            tenant_id=tenant.id,
+            tenant_slug=tenant_slug,
+            request_summary=summary,
+            error=str(exc),
+        )
+        db.commit()
+        raise
+
     return {
         "ok": log.status == "ok",
         "tenant_slug": tenant_slug,
@@ -152,20 +228,120 @@ def requeue_outbox_dead(
     limit = int(payload.get("limit") or 100)
     limit = max(1, min(limit, 500))
     reset_attempts = bool(payload.get("reset_attempts") or False)
+    audit = AdminAuditLogRepository(db)
     tenant_id = None
+    resolved_slug = str(tenant_slug) if tenant_slug else None
     if tenant_slug:
         tenant = db.query(Tenant).filter(Tenant.slug == str(tenant_slug)).first()
         if tenant is None:
+            audit.log(
+                action="outbox.requeue",
+                status="failed",
+                tenant_slug=resolved_slug,
+                request_summary={"limit": limit, "reset_attempts": reset_attempts},
+                error="Tenant not found",
+            )
+            db.commit()
             raise HTTPException(status_code=404, detail="Tenant not found")
         tenant_id = tenant.id
-    count = OutboxRepository(db).requeue_dead(
-        tenant_id=tenant_id, limit=limit, reset_attempts=reset_attempts
-    )
+        resolved_slug = tenant.slug
+    try:
+        count = OutboxRepository(db).requeue_dead(
+            tenant_id=tenant_id, limit=limit, reset_attempts=reset_attempts
+        )
+        audit.log(
+            action="outbox.requeue",
+            status="ok",
+            tenant_id=tenant_id,
+            tenant_slug=resolved_slug,
+            request_summary={
+                "limit": limit,
+                "reset_attempts": reset_attempts,
+                "requeued": count,
+            },
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Admin outbox requeue failed tenant=%s", resolved_slug)
+        audit.log(
+            action="outbox.requeue",
+            status="failed",
+            tenant_id=tenant_id,
+            tenant_slug=resolved_slug,
+            request_summary={"limit": limit, "reset_attempts": reset_attempts},
+            error=str(exc),
+        )
+        db.commit()
+        raise
     return {
         "ok": True,
-        "tenant_slug": tenant_slug,
+        "tenant_slug": resolved_slug,
         "requeued": count,
         "reset_attempts": reset_attempts,
+    }
+
+
+@router.post("/admin/cleanup")
+def cleanup_retention(
+    payload: dict[str, Any] | None = None,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_sync_secret),
+) -> dict[str, Any]:
+    payload = payload or {}
+    dry_run = bool(payload.get("dry_run", True))
+    audit = AdminAuditLogRepository(db)
+    try:
+        result = RetentionService(db).cleanup(dry_run=dry_run)
+        audit.log(
+            action="retention.cleanup",
+            status="ok",
+            request_summary=result,
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Admin cleanup failed")
+        audit.log(
+            action="retention.cleanup",
+            status="failed",
+            request_summary={"dry_run": dry_run},
+            error=str(exc),
+        )
+        db.commit()
+        raise
+    return {"ok": True, **result}
+
+
+@router.get("/admin/audit")
+def get_admin_audit(
+    tenant_slug: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin_sync_secret),
+) -> dict[str, Any]:
+    tenant_id = None
+    if tenant_slug:
+        tenant = db.query(Tenant).filter(Tenant.slug == tenant_slug).first()
+        if tenant is None:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+        tenant_id = tenant.id
+    rows = AdminAuditLogRepository(db).list(tenant_id=tenant_id, tenant_slug=tenant_slug, limit=limit)
+    return {
+        "tenant_slug": tenant_slug,
+        "audit": [
+            {
+                "id": str(r.id),
+                "action": r.action,
+                "tenant_id": str(r.tenant_id) if r.tenant_id else None,
+                "tenant_slug": r.tenant_slug,
+                "status": r.status,
+                "request_summary": r.request_summary,
+                "error": r.error,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ],
     }
 
 
@@ -175,6 +351,10 @@ def get_admin_stats(
     db: Session = Depends(get_db),
     _: None = Depends(require_admin_sync_secret),
 ) -> dict[str, Any]:
+    from sqlalchemy import func
+
+    from app.models.outbox import OutboxMessage
+    from app.models.sync_log import SyncLog
     from app.repositories.webhook_event_repository import WebhookEventRepository
 
     tenant_id = None
@@ -185,4 +365,23 @@ def get_admin_stats(
         tenant_id = tenant.id
     outbox = OutboxRepository(db).stats(tenant_id=tenant_id)
     webhooks = WebhookEventRepository(db).stats()
-    return {"tenant_slug": tenant_slug, "outbox": outbox, "webhooks": webhooks}
+
+    sync_stmt = select(SyncLog.status, func.count()).group_by(SyncLog.status)
+    if tenant_id is not None:
+        sync_stmt = sync_stmt.where(SyncLog.tenant_id == tenant_id)
+    sync_rows = db.execute(sync_stmt).all()
+    sync_logs = {str(status): int(count) for status, count in sync_rows}
+    for key in ["ok", "failed", "running"]:
+        sync_logs.setdefault(key, 0)
+
+    oldest_dead_stmt = select(func.min(OutboxMessage.scheduled_at)).where(OutboxMessage.status == "dead")
+    if tenant_id is not None:
+        oldest_dead_stmt = oldest_dead_stmt.where(OutboxMessage.tenant_id == tenant_id)
+    oldest_dead = db.scalar(oldest_dead_stmt)
+
+    return {
+        "tenant_slug": tenant_slug,
+        "outbox": {**outbox, "oldest_dead_at": oldest_dead.isoformat() if oldest_dead else None},
+        "webhooks": webhooks,
+        "sync_logs": sync_logs,
+    }

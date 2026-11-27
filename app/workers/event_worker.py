@@ -104,6 +104,23 @@ def process_outbox_messages(batch_size: int = 100, max_attempts: int = 5) -> int
         db.close()
 
 
+def run_retention_cleanup() -> dict[str, int | bool]:
+    from app.services.admin.retention import RetentionService
+
+    db = SessionLocal()
+    try:
+        result = RetentionService(db).cleanup(dry_run=False)
+        logger.info(
+            "Retention cleanup: sent_outbox=%s processed_webhooks=%s sync_logs=%s",
+            result.get("sent_outbox_deleted"),
+            result.get("processed_webhooks_deleted"),
+            result.get("sync_logs_deleted"),
+        )
+        return result
+    finally:
+        db.close()
+
+
 def run() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
@@ -111,8 +128,16 @@ def run() -> None:
         "Event worker started; polling interval=%s",
         settings.worker_poll_interval_seconds,
     )
+    next_cleanup_at = 0.0
     while True:
         try:
+            now_mono = time.monotonic()
+            if settings.cleanup_interval_seconds >= 0 and now_mono >= next_cleanup_at:
+                try:
+                    run_retention_cleanup()
+                except Exception:
+                    logger.exception("Retention cleanup iteration failed")
+                next_cleanup_at = now_mono + max(60, settings.cleanup_interval_seconds)
             expired = expire_pending_bookings()
             processed = process_pending_events(
                 batch_size=settings.worker_batch_size,

@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     worker_stale_processing_seconds: int = 300
     outbox_max_attempts: int = 5
     admin_sync_secret: str = ""
+    retention_sent_outbox_days: int = 30
+    retention_processed_webhook_days: int = 30
+    retention_sync_log_days: int = 90
+    cleanup_interval_seconds: int = 3600
 
     def validate_runtime(self) -> list[str]:
         warnings: list[str] = []
@@ -43,6 +47,14 @@ class Settings(BaseSettings):
                 warnings.append("ADMIN_API_TOKEN uses default dev value")
             if not self.admin_sync_secret:
                 warnings.append("ADMIN_SYNC_SECRET is empty in non-development env")
+        for name in [
+            "retention_sent_outbox_days",
+            "retention_processed_webhook_days",
+            "retention_sync_log_days",
+            "cleanup_interval_seconds",
+        ]:
+            if getattr(self, name) < 0:
+                warnings.append(f"{name.upper()} must be >= 0")
         return warnings
 
     admin_api_token: str = "change-me"
