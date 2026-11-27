@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.integrations.sheets.csv_source import CsvCatalogSource
-from app.models.outbox import OutboxMessage
 from app.models.sync_log import SyncLog
 from app.models.tenant import Tenant
 from app.repositories.outbox_repository import OutboxRepository
