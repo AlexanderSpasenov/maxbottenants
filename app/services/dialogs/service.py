@@ -154,9 +154,6 @@ class DialogService:
 
     def _welcome(self, chat_id: int, max_user_id: int, session=None) -> list[dict[str, Any]]:
         tenants = self.tenants.list_active()
-        if not tenants:
-            self.db.commit()
-            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Сейчас нет доступных салонов."}]
         ctx = {}
         if session is not None:
             ctx = dict(session.context or {})
@@ -173,11 +170,15 @@ class DialogService:
             "Клиенты могут выбрать услугу и время, администраторы — управлять заявками и записывать клиентов.\n\n"
             "Кто вы?"
         )
+        rows = [[("Я клиент", "role:client"), ("Я администратор салона", "role:owner")]]
+        rows.append([("Зарегистрировать салон", "role:register")])
+        if not tenants:
+            text += "\n\nПока нет активных салонов, но вы можете зарегистрировать свой."
         return [{
             "chat_id": chat_id,
             "user_id": max_user_id,
             "text": text,
-            "attachments": [self._kb([[("Я клиент", "role:client"), ("Я администратор салона", "role:owner")]])],
+            "attachments": [self._kb(rows)],
         }]
 
     def _handle_role_choice(self, session, chat_id: int, max_user_id: int, text: str):
@@ -214,12 +215,48 @@ class DialogService:
                 "text": "Введите идентификатор салона администратора (код/ссылку, которую вам выдали).",
             }]
 
+        if text == "role:register":
+            session.current_step = sm.REGISTER_SALON_NAME
+            session.context = {"register_salon": True}
+            self.db.add(session)
+            self.db.commit()
+            return [{
+                "chat_id": chat_id, "user_id": max_user_id,
+                "text": "Введите название нового салона. Вы станете его администратором.",
+            }]
+
         self.db.commit()
         return [{
             "chat_id": chat_id, "user_id": max_user_id,
             "text": "Выберите вариант кнопкой:",
-            "attachments": [self._kb([[("Я клиент", "role:client"), ("Я администратор салона", "role:owner")]])],
+            "attachments": [self._kb([
+                [("Я клиент", "role:client"), ("Я администратор салона", "role:owner")],
+                [("Зарегистрировать салон", "role:register")],
+            ])],
         }]
+
+    def _handle_register_salon_name(self, session, chat_id: int, max_user_id: int, text: str):
+        name = (text or "").strip()
+        if len(name) < 2:
+            self.db.commit()
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Название слишком короткое. Введите название салона (минимум 2 символа)."}]
+        if len(name) > 255:
+            name = name[:255].strip()
+        tenant = self.tenants.create_with_unique_slug(display_name=name)
+        self.members.create(tenant_id=tenant.id, max_user_id=max_user_id, role="owner")
+        self.sessions.upsert(
+            chat_id=chat_id, max_user_id=max_user_id, current_tenant_id=tenant.id,
+            current_step=sm.MENU,
+            context={"tenant_slug": tenant.slug, "role": "owner"},
+        )
+        self.db.commit()
+        msg = self._menu_message(chat_id, tenant.display_name, max_user_id, is_owner=True)
+        msg["text"] = (
+            f"Салон «{tenant.display_name}» зарегистрирован.\n"
+            f"Идентификатор салона: {tenant.slug}\n\n"
+            "Теперь добавьте услуги и мастеров (через админ-синхронизацию/БД), затем клиенты смогут записываться."
+        )
+        return [msg, self._menu_message(chat_id, tenant.display_name, max_user_id, is_owner=True)]
 
     def _handle_admin_token(self, session, chat_id: int, max_user_id: int, text: str):
         token = text.strip()
@@ -384,6 +421,8 @@ class DialogService:
             return self._handle_role_choice(session, chat_id, max_user_id, text)
         if step == sm.ENTER_ADMIN_TOKEN:
             return self._handle_admin_token(session, chat_id, max_user_id, text)
+        if step == sm.REGISTER_SALON_NAME:
+            return self._handle_register_salon_name(session, chat_id, max_user_id, text)
         if step == sm.CHOOSE_TENANT:
             return self._choose_tenant(session, chat_id, max_user_id, text)
 
