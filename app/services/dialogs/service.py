@@ -211,7 +211,7 @@ class DialogService:
             self.db.commit()
             return [{
                 "chat_id": chat_id, "user_id": max_user_id,
-                "text": "Введите идентификатор салона администратора или зарегистрируйте новый салон:",
+                "text": "Вы не авторизовывались ранее, необходимо зарегистрировать салон",
                 "attachments": [self._kb([
                     [("Зарегистрировать салон", "role:register")],
                     [("Назад", "role:back")],
@@ -219,14 +219,7 @@ class DialogService:
             }]
 
         if text == "role:register":
-            session.current_step = sm.REGISTER_SALON_NAME
-            session.context = {"register_salon": True}
-            self.db.add(session)
-            self.db.commit()
-            return [{
-                "chat_id": chat_id, "user_id": max_user_id,
-                "text": "Введите название нового салона. Вы станете его администратором.",
-            }]
+            return self._register_salon(chat_id, max_user_id, session)
 
         if text == "role:back":
             return self._welcome(chat_id, max_user_id, session)
@@ -238,13 +231,8 @@ class DialogService:
             "attachments": [self._kb([[("Я клиент", "role:client"), ("Я администратор салона", "role:owner")]])],
         }]
 
-    def _handle_register_salon_name(self, session, chat_id: int, max_user_id: int, text: str):
-        name = (text or "").strip()
-        if len(name) < 2:
-            self.db.commit()
-            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Название слишком короткое. Введите название салона (минимум 2 символа)."}]
-        if len(name) > 255:
-            name = name[:255].strip()
+    def _register_salon(self, chat_id: int, max_user_id: int, session=None) -> list[dict[str, Any]]:
+        name = f"Салон {max_user_id}"
         tenant = self.tenants.create_with_unique_slug(display_name=name)
         self.members.create(tenant_id=tenant.id, max_user_id=max_user_id, role="owner")
         self.sessions.upsert(
@@ -253,16 +241,15 @@ class DialogService:
             context={"tenant_slug": tenant.slug, "role": "owner"},
         )
         self.db.commit()
-        msg = self._menu_message(chat_id, tenant.display_name, max_user_id, is_owner=True)
-        msg["text"] = (
-            f"Салон «{tenant.display_name}» зарегистрирован.\n"
-            f"Идентификатор салона: {tenant.slug}\n\n"
-            "Теперь добавьте услуги и мастеров (через админ-синхронизацию/БД), затем клиенты смогут записываться."
-        )
-        return [msg, self._menu_message(chat_id, tenant.display_name, max_user_id, is_owner=True)]
+        # Show initial /start screen for this admin
+        return self._handle_start(session or self.sessions.get(chat_id), chat_id, max_user_id, "/start")
 
     def _handle_admin_token(self, session, chat_id: int, max_user_id: int, text: str):
         token = text.strip()
+        if token == "role:register":
+            return self._register_salon(chat_id, max_user_id, session)
+        if token == "role:back":
+            return self._welcome(chat_id, max_user_id, session)
         if token.startswith("/start"):
             parts = token.split(maxsplit=1)
             token = parts[1].strip() if len(parts) > 1 else ""
@@ -270,7 +257,7 @@ class DialogService:
             self.db.commit()
             return [{
                 "chat_id": chat_id, "user_id": max_user_id,
-                "text": "Введите идентификатор салона администратора или зарегистрируйте новый салон:",
+                "text": "Вы не авторизовывались ранее, необходимо зарегистрировать салон",
                 "attachments": [self._kb([[("Зарегистрировать салон", "role:register")], [("Назад", "role:back")]])],
             }]
 
@@ -304,7 +291,7 @@ class DialogService:
         self.db.commit()
         return [{
             "chat_id": chat_id, "user_id": max_user_id,
-            "text": "Идентификатор не найден. Проверьте код и попробуйте ещё раз, или зарегистрируйте новый салон.",
+            "text": "Идентификатор не найден. Вы не авторизовывались ранее, необходимо зарегистрировать салон",
             "attachments": [self._kb([[("Зарегистрировать салон", "role:register")], [("Назад", "role:back")]])],
         }]
 
@@ -429,8 +416,6 @@ class DialogService:
             return self._handle_role_choice(session, chat_id, max_user_id, text)
         if step == sm.ENTER_ADMIN_TOKEN:
             return self._handle_admin_token(session, chat_id, max_user_id, text)
-        if step == sm.REGISTER_SALON_NAME:
-            return self._handle_register_salon_name(session, chat_id, max_user_id, text)
         if step == sm.CHOOSE_TENANT:
             return self._choose_tenant(session, chat_id, max_user_id, text)
 
