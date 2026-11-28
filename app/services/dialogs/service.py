@@ -210,6 +210,63 @@ class DialogService:
             elif i == 1:
                 label = f"Завтра {label}"
             rows.append([(label, d.isoformat())])
+        rows.append([("Другая дата", "date:manual")])
+        return rows
+
+    @staticmethod
+    def _time_rows(tenant_tz: str, preferred_date: str | None = None) -> list[list[tuple[str, str]]]:
+        from zoneinfo import ZoneInfo
+        from datetime import datetime, timedelta
+        tz = ZoneInfo(tenant_tz or "Europe/Moscow")
+        now = datetime.now(tz)
+        selected = None
+        if preferred_date:
+            try:
+                selected = datetime.strptime(preferred_date, "%Y-%m-%d").date()
+            except Exception:
+                selected = None
+        today = now.date()
+        rows: list[list[tuple[str, str]]] = []
+        row: list[tuple[str, str]] = []
+        for hour in range(10, 21):
+            for minute in (0, 30):
+                if hour == 20 and minute == 30:
+                    continue
+                if selected == today:
+                    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    if candidate <= now:
+                        continue
+                label = f"{hour:02d}:{minute:02d}"
+                row.append((label, label))
+                if len(row) == 3:
+                    rows.append(row)
+                    row = []
+        if row:
+            rows.append(row)
+        if not rows:
+            rows = [[("Нет доступного времени сегодня", "date:back")]]
+        rows.append([("Другое время", "time:manual"), ("Другая дата", "date:back")])
+        return rows
+
+    @staticmethod
+    def _slot_rows_from_ctx(ctx: dict, tenant) -> list[list[tuple[str, str]]]:
+        slots = ctx.get("slots") or []
+        tz = __import__("zoneinfo").ZoneInfo(getattr(tenant, "timezone", "Europe/Moscow") or "Europe/Moscow")
+        rows = []
+        row = []
+        for i, iso in enumerate(slots, start=1):
+            try:
+                local = __import__("datetime").datetime.fromisoformat(iso).astimezone(tz)
+                label = local.strftime("%H:%M")
+            except Exception:
+                label = iso
+            row.append((label, str(i)))
+            if len(row) == 3:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+        rows.append([("Другая дата", "date:back")])
         return rows
 
     @staticmethod
@@ -301,12 +358,30 @@ class DialogService:
         if step == sm.CHOOSE_SLOT:
             return self._choose_slot(session, tenant, chat_id, max_user_id, text, ctx)
         if step == sm.ENTER_DATE:
+            if text == "date:manual":
+                self.db.commit()
+                return [{
+                    "chat_id": chat_id, "user_id": max_user_id,
+                    "text": "Введите дату в формате YYYY-MM-DD (например 2026-12-01).",
+                }]
             normalized = self._normalize_date(text)
             if not normalized:
                 self.db.commit()
                 return [{
                     "chat_id": chat_id, "user_id": max_user_id,
                     "text": "Неверная дата. Выберите дату кнопкой или введите YYYY-MM-DD.",
+                    "attachments": [self._kb(self._date_rows(getattr(tenant, "timezone", "Europe/Moscow"), 7))],
+                }]
+            # Disallow past dates in tenant timezone
+            from zoneinfo import ZoneInfo
+            from datetime import datetime as dt
+            tz = ZoneInfo(getattr(tenant, "timezone", "Europe/Moscow") or "Europe/Moscow")
+            today = datetime.now(tz).date().isoformat()
+            if normalized < today:
+                self.db.commit()
+                return [{
+                    "chat_id": chat_id, "user_id": max_user_id,
+                    "text": "Эта дата уже прошла. Выберите другую дату.",
                     "attachments": [self._kb(self._date_rows(getattr(tenant, "timezone", "Europe/Moscow"), 7))],
                 }]
             ctx["preferred_date"] = normalized
@@ -316,32 +391,56 @@ class DialogService:
             session.context = ctx
             self.db.add(session)
             self.db.commit()
-            time_rows = [
-                [("10:00", "10:00"), ("11:00", "11:00"), ("12:00", "12:00")],
-                [("13:00", "13:00"), ("14:00", "14:00"), ("15:00", "15:00")],
-                [("16:00", "16:00"), ("17:00", "17:00"), ("18:00", "18:00")],
-                [("19:00", "19:00"), ("20:00", "20:00")],
-            ]
             return [{
                 "chat_id": chat_id, "user_id": max_user_id,
-                "text": "Выберите время:",
-                "attachments": [self._kb(time_rows)],
+                "text": f"Выберите время на {dt.strptime(normalized, '%Y-%m-%d').strftime('%d.%m.%Y')}:",
+                "attachments": [self._kb(self._time_rows(getattr(tenant, "timezone", "Europe/Moscow"), normalized))],
             }]
         if step == sm.ENTER_TIME:
+            if text == "date:back":
+                session.current_step = sm.ENTER_DATE
+                session.context = ctx
+                self.db.add(session)
+                self.db.commit()
+                return [{
+                    "chat_id": chat_id, "user_id": max_user_id,
+                    "text": "Выберите дату:",
+                    "attachments": [self._kb(self._date_rows(getattr(tenant, "timezone", "Europe/Moscow"), 7))],
+                }]
+            if text == "time:manual":
+                self.db.commit()
+                return [{
+                    "chat_id": chat_id, "user_id": max_user_id,
+                    "text": "Введите удобное время в формате HH:MM или HH:MM-HH:MM (например 12:30 или 12:30-14:00).",
+                    "attachments": [self._kb(self._time_rows(getattr(tenant, "timezone", "Europe/Moscow"), ctx.get("preferred_date")))],
+                }]
             normalized = self._normalize_time_range(text)
             if not normalized:
                 self.db.commit()
-                time_rows = [
-                    [("10:00", "10:00"), ("11:00", "11:00"), ("12:00", "12:00")],
-                    [("13:00", "13:00"), ("14:00", "14:00"), ("15:00", "15:00")],
-                    [("16:00", "16:00"), ("17:00", "17:00"), ("18:00", "18:00")],
-                    [("19:00", "19:00"), ("20:00", "20:00")],
-                ]
                 return [{
                     "chat_id": chat_id, "user_id": max_user_id,
                     "text": "Неверное время. Выберите кнопку или введите HH:MM / HH:MM-HH:MM.",
-                    "attachments": [self._kb(time_rows)],
+                    "attachments": [self._kb(self._time_rows(getattr(tenant, "timezone", "Europe/Moscow"), ctx.get("preferred_date")))],
                 }]
+            # block past time for today
+            from zoneinfo import ZoneInfo
+            from datetime import datetime as dt
+            tz = ZoneInfo(getattr(tenant, "timezone", "Europe/Moscow") or "Europe/Moscow")
+            now = datetime.now(tz)
+            pref_date = ctx.get("preferred_date")
+            if pref_date:
+                try:
+                    start_hm = normalized.split("-")[0].strip()
+                    candidate = dt.strptime(f"{pref_date} {start_hm}", "%Y-%m-%d %H:%M").replace(tzinfo=tz)
+                    if candidate <= now:
+                        self.db.commit()
+                        return [{
+                            "chat_id": chat_id, "user_id": max_user_id,
+                            "text": "Это время уже прошло. Выберите другое время.",
+                            "attachments": [self._kb(self._time_rows(getattr(tenant, "timezone", "Europe/Moscow"), pref_date))],
+                        }]
+                except Exception:
+                    pass
             ctx["preferred_time_range"] = normalized
             session.current_step = sm.ENTER_NAME
             session.context = ctx
@@ -434,6 +533,7 @@ class DialogService:
         ctx["service_name"] = service.name
         ctx["price_snapshot"] = str(service.price)
         ctx["duration_snapshot"] = service.duration_minutes
+        ctx["buffer_minutes"] = service.buffer_minutes or 0
         ctx["masters"] = [str(m.id) for m in masters]
         session.current_step = sm.CHOOSE_MASTER
         session.context = ctx
@@ -530,24 +630,49 @@ class DialogService:
         self.db.add(session)
         self.db.commit()
         rows = []
+        row = []
         for i, sl in enumerate(slots, start=1):
             local = sl.start.astimezone(tz)
             label = local.strftime('%H:%M')
-            rows.append([(label, str(i))])
+            row.append((label, str(i)))
+            if len(row) == 3:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+        rows.append([("Другая дата", "date:back")])
         return [{
             "chat_id": chat_id, "user_id": uid,
             "text": f"Выберите время на {pref_day.strftime('%d.%m.%Y')}:",
             "attachments": [self._kb(rows)],
         }]
     def _choose_slot(self, session, tenant, chat_id: int, max_user_id: int, text: str, ctx: dict):
+        if text == "date:back":
+            session.current_step = sm.ENTER_DATE
+            session.context = ctx
+            self.db.add(session)
+            self.db.commit()
+            return [{
+                "chat_id": chat_id, "user_id": max_user_id,
+                "text": "Выберите дату:",
+                "attachments": [self._kb(self._date_rows(getattr(tenant, "timezone", "Europe/Moscow"), 7))],
+            }]
         slots = ctx.get("slots") or []
         if not text.isdigit():
             self.db.commit()
-            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Отправьте номер слота."}]
+            return [{
+                "chat_id": chat_id, "user_id": max_user_id,
+                "text": "Выберите время кнопкой.",
+                "attachments": [self._kb(self._slot_rows_from_ctx(ctx, tenant))],
+            }]
         idx = int(text) - 1
         if idx < 0 or idx >= len(slots):
             self.db.commit()
-            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Неверный номер слота."}]
+            return [{
+                "chat_id": chat_id, "user_id": max_user_id,
+                "text": "Неверный слот. Выберите кнопку.",
+                "attachments": [self._kb(self._slot_rows_from_ctx(ctx, tenant))],
+            }]
         ctx["slot_start"] = slots[idx]
         tz = __import__('zoneinfo').ZoneInfo(tenant.timezone)
         local_dt = __import__('datetime').datetime.fromisoformat(slots[idx])
@@ -578,6 +703,46 @@ class DialogService:
             msg["user_id"] = user_id
         return msg
 
+    def _booking_window(self, tenant, ctx: dict):
+        from datetime import datetime as dt, timedelta
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo(getattr(tenant, "timezone", "Europe/Moscow") or "Europe/Moscow")
+        dur = int(ctx.get("duration_snapshot") or 0)
+        buf = int(ctx.get("buffer_minutes") or 0)
+        if dur <= 0:
+            return None, None
+        if ctx.get("slot_start"):
+            try:
+                start = dt.fromisoformat(ctx["slot_start"])
+            except Exception:
+                return None, None
+            return start, start + timedelta(minutes=dur + buf)
+
+        pref_date = str(ctx.get("preferred_date") or "").strip()
+        pref_time = str(ctx.get("preferred_time_range") or ctx.get("slot_start_local") or "").strip()
+        if not pref_date or not pref_time:
+            return None, None
+        start_str = pref_time.split("-")[0].strip()
+        try:
+            start_naive = dt.strptime(f"{pref_date} {start_str}", "%Y-%m-%d %H:%M")
+        except Exception:
+            return None, None
+        start = start_naive.replace(tzinfo=tz)
+        end_str = pref_time.split("-")[1].strip() if "-" in pref_time else None
+        if end_str:
+            try:
+                end_naive = dt.strptime(f"{pref_date} {end_str}", "%Y-%m-%d %H:%M")
+                end = end_naive.replace(tzinfo=tz)
+                if end <= start:
+                    end = start + timedelta(minutes=dur + buf)
+                else:
+                    end = end + timedelta(minutes=buf)
+                return start, end
+            except Exception:
+                pass
+        return start, start + timedelta(minutes=dur + buf)
+
     def _create_booking(self, session, tenant, chat_id: int, max_user_id: int, ctx: dict):
         phone = str(ctx.get("customer_phone") or "")
         slot_start = None
@@ -591,21 +756,24 @@ class DialogService:
 
             slot_start = dt.fromisoformat(ctx["slot_start"])
             dur = int(ctx.get("duration_snapshot") or 0)
-            slot_end = slot_start + timedelta(minutes=dur) if dur else None
+            buf = int(ctx.get("buffer_minutes") or 0)
+            slot_end = slot_start + timedelta(minutes=dur + buf) if dur else None
             if getattr(tenant, "online_booking_auto_confirm", True):
                 status = "confirmed"
             else:
                 status = "pending_confirmation"
                 hold = int(getattr(tenant, "online_booking_hold_minutes", 15) or 15)
                 expires_at = datetime.now(UTC) + timedelta(minutes=max(hold, 1))
-        if slot_start and slot_end and ctx.get("master_id"):
+
+        window_start, window_end = self._booking_window(tenant, ctx)
+        if ctx.get("master_id") and window_start and window_end:
             master_uuid = uuid.UUID(ctx["master_id"])
             self.bookings.lock_master(tenant.id, master_uuid)
             conflict = self.bookings.has_conflicting_booking(
                 tenant_id=tenant.id,
                 master_id=master_uuid,
-                slot_start=slot_start,
-                slot_end=slot_end,
+                slot_start=window_start,
+                slot_end=window_end,
             )
             if conflict:
                 session.current_step = sm.ENTER_DATE
@@ -614,8 +782,11 @@ class DialogService:
                 self.db.commit()
                 return [{
                     "chat_id": chat_id, "user_id": max_user_id,
-                    "text": "Этот слот уже занят. Выберите другую дату/время.",
+                    "text": "Это время уже занято у выбранного мастера (учитывается длительность услуги). Выберите другую дату/время.",
+                    "attachments": [self._kb(self._date_rows(getattr(tenant, "timezone", "Europe/Moscow"), 7))],
                 }]
+            if booking_mode == "request_only":
+                slot_start, slot_end = window_start, window_end
 
         booking = Booking(
             tenant_id=tenant.id,

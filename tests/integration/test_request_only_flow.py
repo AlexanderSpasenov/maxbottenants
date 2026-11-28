@@ -146,6 +146,50 @@ def test_request_only_happy_path_creates_booking_and_notifies_owner(db_session):
     assert "0000" in outbox[0].payload["text"]
 
 
+def test_request_only_conflict_blocks_overlapping_unconfirmed_booking(db_session):
+    app = _client_with_db(db_session)
+    t1, _ = _seed(db_session)
+    db_session.commit()
+
+    base = [
+        ("/start salon-a", "салон A"),
+        ("1", "Выберите услугу"),
+        ("1", "Выберите мастера"),
+        ("1", "Выберите дату"),
+        ("2026-12-02", "Выберите время"),
+        ("11:00", "Как вас зовут?"),
+        ("Иван", "Контактный телефон"),
+        ("+79990000001", "Проверьте заявку"),
+        ("1", "Заявка создана"),
+    ]
+    for mid_i, (text, expected) in enumerate(base):
+        r = app.post("/webhook/max", json=_msg(100, 200, text, f"c1-{mid_i}"))
+        assert r.status_code == 200
+    process_pending_events(batch_size=50, db=db_session)
+    b = db_session.query(Booking).filter_by(tenant_id=t1.id).one()
+    assert b.status == "awaiting_salon"
+    assert b.slot_start is not None and b.slot_end is not None
+
+    # same master, overlapping time (service 60 min) - 11:30 should conflict
+    base2 = [
+        ("/start salon-a", "салон A"),
+        ("1", "Выберите услугу"),
+        ("1", "Выберите мастера"),
+        ("1", "Выберите дату"),
+        ("2026-12-02", "Выберите время"),
+        ("11:30", "Как вас зовут?"),
+        ("Петр", "Контактный телефон"),
+        ("+79990000002", "Проверьте заявку"),
+        ("1", "уже занято"),
+    ]
+    for mid_i, (text, expected) in enumerate(base2):
+        r = app.post("/webhook/max", json=_msg(101, 201, text, f"c2-{mid_i}"))
+        assert r.status_code == 200
+    process_pending_events(batch_size=50, db=db_session)
+    bookings = db_session.query(Booking).filter_by(tenant_id=t1.id).all()
+    assert len(bookings) == 1
+
+
 def test_owner_confirm_updates_booking_and_notifies_client(db_session):
     t1, _ = _seed(db_session)
     client = _client_with_db(db_session)

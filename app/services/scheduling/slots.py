@@ -50,8 +50,8 @@ def get_available_slots(
     local_now = now.astimezone(tz)
     schedule_repo = ScheduleRepository(db)
     booking_repo = BookingRepository(db)
-    step = timedelta(minutes=max(service_duration_minutes + buffer_minutes, 15))
     duration = timedelta(minutes=service_duration_minutes)
+    slot_step = timedelta(minutes=30)
 
     slots: list[Slot] = []
     for day_offset in range(days_ahead):
@@ -83,9 +83,10 @@ def get_available_slots(
             while cursor + duration <= window_end:
                 slot_start = cursor
                 slot_end = cursor + duration
-                cursor += step
+                cursor += slot_step
 
-                if slot_start <= local_now + timedelta(minutes=15):
+                # Do not offer past slots; keep small lead time.
+                if slot_start <= local_now:
                     continue
 
                 # blocked exceptions
