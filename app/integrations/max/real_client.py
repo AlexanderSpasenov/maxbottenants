@@ -22,7 +22,14 @@ class RealMaxClient(MaxClient):
         if v in {"0", "false", "no", "off"}:
             self.verify: bool | str = False
         elif v in {"1", "true", "yes", "on", ""}:
-            self.verify = certifi.where()
+            # Prefer system CA bundle so Docker image can ship Russian Trusted CA.
+            import os
+            for path in ("/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"):
+                if os.path.exists(path):
+                    self.verify = path
+                    break
+            else:
+                self.verify = certifi.where()
         else:
             self.verify = settings.max_tls_verify.strip()
 
