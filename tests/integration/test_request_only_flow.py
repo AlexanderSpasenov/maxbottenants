@@ -140,10 +140,12 @@ def test_request_only_happy_path_creates_booking_and_notifies_owner(db_session):
 
     outbox = db_session.query(OutboxMessage).filter_by(tenant_id=t1.id, chat_id=900001).all()
     assert len(outbox) >= 1
-    assert str(booking.id) in outbox[0].payload["text"]
-    assert "/confirm" in outbox[0].payload["text"]
-    assert "+79990000000" not in outbox[0].payload["text"]
-    assert "0000" in outbox[0].payload["text"]
+    payload = outbox[0].payload
+    assert "Новая заявка" in payload["text"]
+    assert str(booking.id) in str(payload)
+    assert payload.get("attachments")
+    assert "+79990000000" not in payload["text"]
+    assert "0000" in payload["text"]
 
 
 def test_request_only_conflict_blocks_overlapping_unconfirmed_booking(db_session):

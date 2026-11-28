@@ -22,6 +22,10 @@ class CatalogRepository:
         stmt = select(Service).where(Service.tenant_id == tenant_id, Service.id == service_id)
         return self.db.scalar(stmt)
 
+    def get_master(self, tenant_id: uuid.UUID, master_id: uuid.UUID) -> Master | None:
+        stmt = select(Master).where(Master.tenant_id == tenant_id, Master.id == master_id)
+        return self.db.scalar(stmt)
+
     def list_active_masters(self, tenant_id: uuid.UUID) -> list[Master]:
         stmt = (
             select(Master)

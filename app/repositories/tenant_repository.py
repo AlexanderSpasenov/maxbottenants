@@ -15,3 +15,6 @@ class TenantRepository:
     def get_by_slug(self, slug: str) -> Tenant | None:
         stmt = select(Tenant).where(Tenant.slug == slug)
         return self.db.scalar(stmt)
+
+    def get_by_id(self, tenant_id) -> Tenant | None:
+        return self.db.get(Tenant, tenant_id)

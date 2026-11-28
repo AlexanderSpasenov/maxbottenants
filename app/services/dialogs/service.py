@@ -69,18 +69,19 @@ class DialogService:
                 return self._handle_start(session, chat_id, max_user_id, text)
             tenant = self._resolve_tenant(session)
             if tenant and tenant.status == "active":
+                member = self.members.get_by_tenant_user(tenant.id, max_user_id)
                 self.sessions.upsert(
                     chat_id=chat_id,
                     max_user_id=max_user_id,
                     current_tenant_id=tenant.id,
                     current_step=sm.MENU,
-                    context={"tenant_slug": tenant.slug},
+                    context={"tenant_slug": tenant.slug, "role": member.role if member else "client"},
                 )
                 self.db.commit()
-                return [self._menu_message(chat_id, tenant.display_name, max_user_id)]
+                return [self._menu_message(chat_id, tenant.display_name, max_user_id, is_owner=bool(member and member.role == "owner"))]
             return self._handle_start(session, chat_id, max_user_id, "/start")
 
-        owner_response = self._handle_owner_command(chat_id, max_user_id, text)
+        owner_response = self._handle_owner_action(chat_id, max_user_id, text)
         if owner_response is not None:
             self.db.commit()
             return owner_response
@@ -121,13 +122,7 @@ class DialogService:
                         context={"tenant_slug": tenant.slug, "role": "owner"},
                     )
                     self.db.commit()
-                    return [{
-                        "chat_id": chat_id, "user_id": max_user_id,
-                        "text": (
-                            f"Вы привязаны как владелец салона {tenant.display_name}."
-                            " Команды: /confirm <booking_id>, /reject <booking_id>"
-                        ),
-                    }]
+                    return [self._menu_message(chat_id, tenant.display_name, max_user_id, is_owner=True)]
             tenant = self.tenants.get_by_slug(token)
             if tenant and tenant.status == "active":
                 self.customers.upsert(tenant_id=tenant.id, max_user_id=max_user_id)
@@ -144,15 +139,16 @@ class DialogService:
         # /start without token: return to selected salon menu if known.
         current = self._resolve_tenant(session)
         if current is not None and current.status == "active":
+            member = self.members.get_by_tenant_user(current.id, max_user_id)
             self.sessions.upsert(
                 chat_id=chat_id,
                 max_user_id=max_user_id,
                 current_tenant_id=current.id,
                 current_step=sm.MENU,
-                context={"tenant_slug": current.slug},
+                context={"tenant_slug": current.slug, "role": member.role if member else "client"},
             )
             self.db.commit()
-            return [self._menu_message(chat_id, current.display_name, max_user_id)]
+            return [self._menu_message(chat_id, current.display_name, max_user_id, is_owner=bool(member and member.role == "owner"))]
 
         tenants = self.tenants.list_active()
         if not tenants:
@@ -161,15 +157,16 @@ class DialogService:
         if len(tenants) == 1:
             tenant = tenants[0]
             self.customers.upsert(tenant_id=tenant.id, max_user_id=max_user_id)
+            member = self.members.get_by_tenant_user(tenant.id, max_user_id)
             self.sessions.upsert(
                 chat_id=chat_id,
                 max_user_id=max_user_id,
                 current_tenant_id=tenant.id,
                 current_step=sm.MENU,
-                context={"tenant_slug": tenant.slug},
+                context={"tenant_slug": tenant.slug, "role": member.role if member else "client"},
             )
             self.db.commit()
-            return [self._menu_message(chat_id, tenant.display_name, max_user_id)]
+            return [self._menu_message(chat_id, tenant.display_name, max_user_id, is_owner=bool(member and member.role == "owner"))]
 
         session.current_step = sm.CHOOSE_TENANT
         session.context = {}
@@ -280,11 +277,14 @@ class DialogService:
             "cancelled": "Отменена",
         }.get(str(status or ""), str(status or "-"))
 
-    def _menu_message(self, chat_id: int, tenant_name: str, user_id: int | None = None) -> dict[str, Any]:
+    def _menu_message(self, chat_id: int, tenant_name: str, user_id: int | None = None, is_owner: bool = False) -> dict[str, Any]:
+        rows = [[("Записаться", "1"), ("Мои заявки", "2")]]
+        if is_owner:
+            rows.append([("Заявки салона", "owner:bookings")])
         msg: dict[str, Any] = {
             "chat_id": chat_id,
             "text": f"Салон: {tenant_name}\nВыберите действие:",
-            "attachments": [self._kb([[("Записаться", "1"), ("Мои заявки", "2")]])],
+            "attachments": [self._kb(rows)],
         }
         if user_id is not None:
             msg["user_id"] = user_id
@@ -307,12 +307,14 @@ class DialogService:
             return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Сессия устарела. /start"}]
 
         if step == sm.MENU:
+            member = self.members.get_by_tenant_user(tenant.id, max_user_id)
+            is_owner = bool(member and member.role == "owner")
             if text == "1":
                 services = self.catalog.list_active_services(tenant.id)
                 if not services:
                     self.db.commit()
                     return [{"chat_id": chat_id, "user_id": max_user_id, "text": "В салоне пока нет активных услуг."}]
-                ctx = {"tenant_slug": tenant.slug, "services": [str(s.id) for s in services]}
+                ctx = {"tenant_slug": tenant.slug, "services": [str(s.id) for s in services], "role": member.role if member else "client"}
                 session.current_step = sm.CHOOSE_SERVICE
                 session.context = ctx
                 self.db.add(session)
@@ -330,7 +332,7 @@ class DialogService:
                 bookings = self.bookings.list_for_user(tenant.id, max_user_id)
                 if not bookings:
                     self.db.commit()
-                    return [{"chat_id": chat_id, "user_id": max_user_id, "text": "У вас пока нет заявок."}]
+                    return [{"chat_id": chat_id, "user_id": max_user_id, "text": "У вас пока нет заявок.", "attachments": [self._kb([[("Меню","/menu")]])]}]
                 lines = ["Ваши заявки:"]
                 for b in bookings[:10]:
                     dt = b.preferred_date or "-"
@@ -347,9 +349,11 @@ class DialogService:
                     part += f", {dt} {tr}".rstrip()
                     lines.append(part)
                 self.db.commit()
-                return [{"chat_id": chat_id, "user_id": max_user_id, "text": "\n".join(lines)}]
+                return [{"chat_id": chat_id, "user_id": max_user_id, "text": "\n".join(lines), "attachments": [self._kb([[("Меню","/menu")]])]}]
+            if text == "owner:bookings" and is_owner:
+                return self._owner_bookings_dates(chat_id, max_user_id)
             self.db.commit()
-            return [self._menu_message(chat_id, tenant.display_name, max_user_id)]
+            return [self._menu_message(chat_id, tenant.display_name, max_user_id, is_owner=is_owner)]
 
         if step == sm.CHOOSE_SERVICE:
             return self._choose_service(session, tenant, chat_id, text, ctx, max_user_id)
@@ -859,23 +863,157 @@ class DialogService:
                 f"Дата: {ctx.get('preferred_date')}\n"
                 f"Время: {ctx.get('preferred_time_range')}\n"
                 f"Клиент: {ctx.get('customer_name')} {mask_phone(ctx.get('customer_phone'))}\n"
-                f"Подтвердить: /confirm {booking.id}\n"
-                f"Отклонить: /reject {booking.id}"
+                f"Статус: {self._status_label(booking.status)}"
             )
+            attachments = [self._kb([[
+                ("Подтвердить", f"owner:confirm:{booking.id}"),
+                ("Отклонить", f"owner:reject:{booking.id}"),
+            ]])]
+            payload = {"text": text, "user_id": owner.max_user_id, "attachments": attachments}
             self.outbox.enqueue(
                 tenant_id=tenant_id,
                 chat_id=owner.max_user_id,
-                payload={"text": text, "user_id": owner.max_user_id},
+                payload=payload,
                 dedupe_key=f"booking:{booking.id}:owner_notify:{owner.max_user_id}",
             )
-            msgs.append({"chat_id": owner.max_user_id, "user_id": owner.max_user_id, "text": text, "queued": True})
+            msgs.append({"chat_id": owner.max_user_id, "user_id": owner.max_user_id, "text": text, "attachments": attachments, "queued": True})
         return msgs
 
-    def _handle_owner_command(self, chat_id: int, max_user_id: int, text: str):
+    def _handle_owner_action(self, chat_id: int, max_user_id: int, text: str):
+        # Text commands for backward compatibility
         parts = text.split()
-        if len(parts) != 2 or parts[0] not in {"/confirm", "/reject"}:
+        if len(parts) == 2 and parts[0] in {"/confirm", "/reject"}:
+            cmd = "owner:confirm" if parts[0] == "/confirm" else "owner:reject"
+            return self._owner_change_booking_status(chat_id, max_user_id, cmd, parts[1])
+
+        if text == "owner:bookings":
+            return self._owner_bookings_dates(chat_id, max_user_id)
+        if text.startswith("owner:bookings:"):
+            day = text.split(":", 2)[2]
+            return self._owner_bookings_for_day(chat_id, max_user_id, day)
+        if text.startswith("owner:confirm:") or text.startswith("owner:reject:"):
+            _, action, booking_id_raw = text.split(":", 2)
+            return self._owner_change_booking_status(chat_id, max_user_id, f"owner:{action}", booking_id_raw)
+        # Plain YYYY-MM-DD from owner - convenient manual date lookup
+        if len(text) == 10 and text[4] == "-" and text[7] == "-":
+            tenant = self._owner_tenant(max_user_id)
+            if tenant is not None:
+                try:
+                    from datetime import datetime as dt
+                    dt.strptime(text, "%Y-%m-%d")
+                    return self._owner_bookings_for_day(chat_id, max_user_id, text)
+                except Exception:
+                    pass
+        return None
+
+    def _owner_tenant(self, max_user_id: int):
+        # Resolve owner tenant from latest active owner membership
+        members = self.members.list_for_user(max_user_id)
+        owners = [m for m in members if m.role == "owner" and m.is_active]
+        if not owners:
             return None
-        cmd, booking_id_raw = parts
+        tenant = self.tenants.get_by_id(owners[0].tenant_id)
+        if tenant and tenant.status == "active":
+            return tenant
+        return None
+
+    def _owner_bookings_dates(self, chat_id: int, max_user_id: int):
+        tenant = self._owner_tenant(max_user_id)
+        if tenant is None:
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Вы не привязаны как владелец салона."}]
+        from datetime import datetime as dt, timedelta
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(getattr(tenant, "timezone", "Europe/Moscow") or "Europe/Moscow")
+        today = datetime.now(tz).date()
+        remapped: list[list[tuple[str, str]]] = []
+        weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+        for i in range(14):
+            d = today + timedelta(days=i)
+            bookings = self.bookings.list_for_tenant_day(tenant.id, d, tz)
+            if not bookings:
+                continue
+            label = f"{d.strftime('%d.%m')} ({weekdays[d.weekday()]})"
+            if i == 0:
+                label = f"Сегодня {label}"
+            elif i == 1:
+                label = f"Завтра {label}"
+            label = f"{label} · {len(bookings)}"
+            remapped.append([(label, f"owner:bookings:{d.isoformat()}")])
+        remapped.append([("Ввести дату", "owner:bookings:manual"), ("Меню", "/menu")])
+        if len(remapped) == 1:
+            return [{
+                "chat_id": chat_id, "user_id": max_user_id,
+                "text": "На ближайшие 14 дней заявок нет. Можно ввести дату вручную.",
+                "attachments": [self._kb(remapped)],
+            }]
+        return [{
+            "chat_id": chat_id, "user_id": max_user_id,
+            "text": "Выберите дату с заявками:",
+            "attachments": [self._kb(remapped)],
+        }]
+
+    def _owner_bookings_for_day(self, chat_id: int, max_user_id: int, day_raw: str):
+        tenant = self._owner_tenant(max_user_id)
+        if tenant is None:
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Вы не привязаны как владелец салона."}]
+        if day_raw == "manual":
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Введите дату в формате YYYY-MM-DD (например 2026-12-01)."}]
+        try:
+            from datetime import datetime as dt
+            from zoneinfo import ZoneInfo
+            day = dt.strptime(day_raw, "%Y-%m-%d").date()
+        except Exception:
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Неверная дата. Используйте YYYY-MM-DD."}]
+        tz = ZoneInfo(getattr(tenant, "timezone", "Europe/Moscow") or "Europe/Moscow")
+        bookings = self.bookings.list_for_tenant_day(tenant.id, day, tz)
+        if not bookings:
+            return [{
+                "chat_id": chat_id, "user_id": max_user_id,
+                "text": f"На {day.strftime('%d.%m.%Y')} заявок нет.",
+                "attachments": [self._kb([[("Другие даты", "owner:bookings")]])],
+            }]
+        msgs: list[dict[str, Any]] = [{
+            "chat_id": chat_id, "user_id": max_user_id,
+            "text": f"Заявки на {day.strftime('%d.%m.%Y')}:",
+        }]
+        for b in bookings[:20]:
+            svc = self.catalog.get_service(tenant.id, b.service_id)
+            master_name = None
+            if b.master_id:
+                m = self.catalog.get_master(tenant.id, b.master_id)
+                master_name = m.display_name if m else None
+            time_str = b.preferred_time_range or (b.slot_start.astimezone(tz).strftime('%H:%M') if b.slot_start else '-')
+            text = (
+                f"{time_str} — {svc.name if svc else 'Услуга'}\n"
+                f"Мастер: {master_name or '-'}\n"
+                f"Клиент: {b.customer_name_snapshot or '-'} {mask_phone('') if not b.customer_phone_encrypted else ''}\n"
+                f"Статус: {self._status_label(b.status)}"
+            ).strip()
+            # avoid empty masked placeholder; mask stored phone properly
+            if b.customer_phone_encrypted:
+                try:
+                    from app.core.crypto import decrypt_value
+                    text = text.replace("Клиент: " + (b.customer_name_snapshot or '-'), f"Клиент: {b.customer_name_snapshot or '-'} {mask_phone(decrypt_value(b.customer_phone_encrypted))}")
+                except Exception:
+                    pass
+            attachments = []
+            if b.status in {"awaiting_salon", "pending_confirmation"}:
+                attachments = [self._kb([[
+                    ("Подтвердить", f"owner:confirm:{b.id}"),
+                    ("Отклонить", f"owner:reject:{b.id}"),
+                ]])]
+            msg = {"chat_id": chat_id, "user_id": max_user_id, "text": text}
+            if attachments:
+                msg["attachments"] = attachments
+            msgs.append(msg)
+        msgs.append({
+            "chat_id": chat_id, "user_id": max_user_id,
+            "text": "Выберите действие:",
+            "attachments": [self._kb([[("Другие даты", "owner:bookings"), ("Меню", "/menu")]])],
+        })
+        return msgs
+
+    def _owner_change_booking_status(self, chat_id: int, max_user_id: int, cmd: str, booking_id_raw: str):
         try:
             booking_id = uuid.UUID(booking_id_raw)
         except ValueError:
@@ -889,7 +1027,6 @@ class DialogService:
         if member is None or member.role != "owner":
             return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Недостаточно прав."}]
 
-        # Atomic status transition for idempotent owner commands.
         from_statuses = ["awaiting_salon", "pending_confirmation"]
         updated = None
         for fs in from_statuses:
@@ -897,13 +1034,13 @@ class DialogService:
                 tenant_id=booking.tenant_id,
                 booking_id=booking.id,
                 from_status=fs,
-                to_status="confirmed" if cmd == "/confirm" else "rejected",
+                to_status="confirmed" if cmd == "owner:confirm" else "rejected",
             )
             if updated is not None:
                 break
         if updated is None:
             self.db.refresh(booking)
-            return [{"chat_id": chat_id, "user_id": max_user_id, "text": f"Заявка уже обработана: {booking.status}"}]
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": f"Заявка уже обработана: {self._status_label(booking.status)}"}]
         booking = updated
         new_status = booking.status
 
@@ -917,11 +1054,10 @@ class DialogService:
             chat_id=booking.chat_id,
             payload={"text": client_text, "user_id": booking.max_user_id},
         )
-
         owner_text = f"Заявка переведена в статус: {self._status_label(new_status)}."
         return [
             {"chat_id": chat_id, "user_id": max_user_id, "text": owner_text},
-            {"chat_id": booking.chat_id, "text": client_text, "queued": True},
+            {"chat_id": booking.chat_id, "user_id": booking.max_user_id, "text": client_text, "queued": True},
         ]
 
     def _resolve_tenant(self, session):

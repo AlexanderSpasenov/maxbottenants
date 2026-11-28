@@ -37,3 +37,7 @@ class TenantMemberRepository:
             TenantMember.is_active.is_(True),
         )
         return list(self.db.scalars(stmt).all())
+
+    def list_for_user(self, max_user_id: int) -> list[TenantMember]:
+        stmt = select(TenantMember).where(TenantMember.max_user_id == max_user_id)
+        return list(self.db.scalars(stmt).all())
