@@ -1044,17 +1044,36 @@ class DialogService:
         booking = updated
         new_status = booking.status
 
+        tenant = self.tenants.get_by_id(booking.tenant_id)
+        tz_name = getattr(tenant, "timezone", "Europe/Moscow") or "Europe/Moscow"
+        svc = self.catalog.get_service(booking.tenant_id, booking.service_id) if booking.service_id else None
+        master = self.catalog.get_master(booking.tenant_id, booking.master_id) if booking.master_id else None
+        when = booking.preferred_time_range or ""
+        if booking.slot_start:
+            try:
+                from zoneinfo import ZoneInfo
+                when = booking.slot_start.astimezone(ZoneInfo(tz_name)).strftime("%H:%M")
+            except Exception:
+                pass
+        details = (
+            f"Услуга: {svc.name if svc else '-'}\n"
+            f"Мастер: {master.display_name if master else '-'}\n"
+            f"Дата: {booking.preferred_date or '-'}\n"
+            f"Время: {when or '-'}\n"
+            f"Клиент: {booking.customer_name_snapshot or '-'}"
+        )
+
         client_text = (
-            "Ваша заявка подтверждена салоном."
+            f"Ваша заявка подтверждена салоном.\n{details}"
             if new_status == "confirmed"
-            else "Заявка отклонена салоном. Выберите другое время /start."
+            else f"Заявка отклонена салоном. Выберите другое время /start.\n{details}"
         )
         self.outbox.enqueue(
             tenant_id=booking.tenant_id,
             chat_id=booking.chat_id,
             payload={"text": client_text, "user_id": booking.max_user_id},
         )
-        owner_text = f"Заявка переведена в статус: {self._status_label(new_status)}."
+        owner_text = f"Заявка переведена в статус: {self._status_label(new_status)}.\n{details}"
         return [
             {"chat_id": chat_id, "user_id": max_user_id, "text": owner_text},
             {"chat_id": booking.chat_id, "user_id": booking.max_user_id, "text": client_text, "queued": True},
