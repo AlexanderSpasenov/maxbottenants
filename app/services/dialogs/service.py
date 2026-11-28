@@ -150,34 +150,118 @@ class DialogService:
             self.db.commit()
             return [self._menu_message(chat_id, current.display_name, max_user_id, is_owner=bool(member and member.role == "owner"))]
 
+        return self._welcome(chat_id, max_user_id, session)
+
+    def _welcome(self, chat_id: int, max_user_id: int, session=None) -> list[dict[str, Any]]:
         tenants = self.tenants.list_active()
         if not tenants:
             self.db.commit()
             return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Сейчас нет доступных салонов."}]
-        if len(tenants) == 1:
-            tenant = tenants[0]
-            self.customers.upsert(tenant_id=tenant.id, max_user_id=max_user_id)
+        ctx = {}
+        if session is not None:
+            ctx = dict(session.context or {})
+        ctx.pop("admin_login", None)
+        if session is not None:
+            session.current_step = sm.CHOOSE_ROLE
+            session.context = ctx
+            self.db.add(session)
+        else:
+            self.sessions.upsert(chat_id=chat_id, max_user_id=max_user_id, current_step=sm.CHOOSE_ROLE, context=ctx)
+        self.db.commit()
+        text = (
+            "БьютиЗапись — бот для записи в салон.\n"
+            "Клиенты могут выбрать услугу и время, администраторы — управлять заявками и записывать клиентов.\n\n"
+            "Кто вы?"
+        )
+        return [{
+            "chat_id": chat_id,
+            "user_id": max_user_id,
+            "text": text,
+            "attachments": [self._kb([[("Я клиент", "role:client"), ("Я администратор салона", "role:owner")]])],
+        }]
+
+    def _handle_role_choice(self, session, chat_id: int, max_user_id: int, text: str):
+        if text == "role:client":
+            tenants = self.tenants.list_active()
+            if len(tenants) == 1:
+                tenant = tenants[0]
+                self.customers.upsert(tenant_id=tenant.id, max_user_id=max_user_id)
+                member = self.members.get_by_tenant_user(tenant.id, max_user_id)
+                self.sessions.upsert(
+                    chat_id=chat_id, max_user_id=max_user_id, current_tenant_id=tenant.id,
+                    current_step=sm.MENU,
+                    context={"tenant_slug": tenant.slug, "role": member.role if member else "client"},
+                )
+                self.db.commit()
+                return [self._menu_message(chat_id, tenant.display_name, max_user_id, is_owner=bool(member and member.role == "owner"))]
+            session.current_step = sm.CHOOSE_TENANT
+            session.context = {"role": "client"}
+            self.db.add(session)
+            self.db.commit()
+            lines = ["Выберите салон:"]
+            rows = []
+            for i, t in enumerate(tenants, start=1):
+                rows.append([(f"{i}. {t.display_name}", str(i))])
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "\n".join(lines), "attachments": [self._kb(rows)]}]
+
+        if text == "role:owner":
+            session.current_step = sm.ENTER_ADMIN_TOKEN
+            session.context = {"admin_login": True}
+            self.db.add(session)
+            self.db.commit()
+            return [{
+                "chat_id": chat_id, "user_id": max_user_id,
+                "text": "Введите идентификатор салона администратора (код/ссылку, которую вам выдали).",
+            }]
+
+        self.db.commit()
+        return [{
+            "chat_id": chat_id, "user_id": max_user_id,
+            "text": "Выберите вариант кнопкой:",
+            "attachments": [self._kb([[("Я клиент", "role:client"), ("Я администратор салона", "role:owner")]])],
+        }]
+
+    def _handle_admin_token(self, session, chat_id: int, max_user_id: int, text: str):
+        token = text.strip()
+        if token.startswith("/start"):
+            parts = token.split(maxsplit=1)
+            token = parts[1].strip() if len(parts) > 1 else ""
+        if not token:
+            self.db.commit()
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Введите идентификатор салона администратора."}]
+
+        link = self.links.get_by_token(token)
+        if link and link.tenant and link.link_type in {"owner", "admin"}:
+            tenant = link.tenant
             member = self.members.get_by_tenant_user(tenant.id, max_user_id)
+            if member is None:
+                self.members.create(tenant_id=tenant.id, max_user_id=max_user_id, role="owner")
             self.sessions.upsert(
-                chat_id=chat_id,
-                max_user_id=max_user_id,
-                current_tenant_id=tenant.id,
+                chat_id=chat_id, max_user_id=max_user_id, current_tenant_id=tenant.id,
                 current_step=sm.MENU,
-                context={"tenant_slug": tenant.slug, "role": member.role if member else "client"},
+                context={"tenant_slug": tenant.slug, "role": "owner"},
             )
             self.db.commit()
-            return [self._menu_message(chat_id, tenant.display_name, max_user_id, is_owner=bool(member and member.role == "owner"))]
+            return [self._menu_message(chat_id, tenant.display_name, max_user_id, is_owner=True)]
 
-        session.current_step = sm.CHOOSE_TENANT
-        session.context = {}
-        self.db.add(session)
+        tenant = self.tenants.get_by_slug(token)
+        if tenant and tenant.status == "active":
+            member = self.members.get_by_tenant_user(tenant.id, max_user_id)
+            if member is None:
+                self.members.create(tenant_id=tenant.id, max_user_id=max_user_id, role="owner")
+            self.sessions.upsert(
+                chat_id=chat_id, max_user_id=max_user_id, current_tenant_id=tenant.id,
+                current_step=sm.MENU,
+                context={"tenant_slug": tenant.slug, "role": "owner"},
+            )
+            self.db.commit()
+            return [self._menu_message(chat_id, tenant.display_name, max_user_id, is_owner=True)]
+
         self.db.commit()
-        lines = ["Выберите салон:"]
-        rows = []
-        for i, t in enumerate(tenants, start=1):
-            lines.append(f"{i}. {t.display_name} (/start {t.slug})")
-            rows.append([(f"{i}. {t.display_name}", str(i))])
-        return [{"chat_id": chat_id, "user_id": max_user_id, "text": "\n".join(lines), "attachments": [self._kb(rows)]}]
+        return [{
+            "chat_id": chat_id, "user_id": max_user_id,
+            "text": "Идентификатор не найден. Проверьте код и попробуйте ещё раз, или нажмите /start.",
+        }]
 
     @staticmethod
     def _kb(rows: list[list[tuple[str, str]]]) -> dict[str, Any]:
@@ -296,6 +380,10 @@ class DialogService:
         ctx = dict(session.context or {})
         ctx["max_user_id"] = max_user_id
 
+        if step == sm.CHOOSE_ROLE:
+            return self._handle_role_choice(session, chat_id, max_user_id, text)
+        if step == sm.ENTER_ADMIN_TOKEN:
+            return self._handle_admin_token(session, chat_id, max_user_id, text)
         if step == sm.CHOOSE_TENANT:
             return self._choose_tenant(session, chat_id, max_user_id, text)
 
@@ -305,7 +393,7 @@ class DialogService:
             session.context = {}
             self.db.add(session)
             self.db.commit()
-            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Сессия устарела. /start"}]
+            return self._welcome(chat_id, max_user_id, session)
 
         if step == sm.MENU:
             member = self.members.get_by_tenant_user(tenant.id, max_user_id)

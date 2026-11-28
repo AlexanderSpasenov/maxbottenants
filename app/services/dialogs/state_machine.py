@@ -11,6 +11,8 @@ class DialogState:
 
 
 START = "start"
+CHOOSE_ROLE = "choose_role"
+ENTER_ADMIN_TOKEN = "enter_admin_token"
 CHOOSE_TENANT = "choose_tenant"
 MENU = "menu"
 CHOOSE_SERVICE = "choose_service"
