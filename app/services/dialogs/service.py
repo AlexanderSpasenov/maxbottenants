@@ -909,16 +909,25 @@ class DialogService:
         if text.startswith("owner:confirm:") or text.startswith("owner:reject:"):
             _, action, booking_id_raw = text.split(":", 2)
             return self._owner_change_booking_status(chat_id, max_user_id, f"owner:{action}", booking_id_raw)
-        # Plain YYYY-MM-DD from owner - convenient manual date lookup
+        # Plain YYYY-MM-DD from owner - convenient manual date lookup,
+        # but not when owner is in booking flow (date buttons send same format).
         if len(text) == 10 and text[4] == "-" and text[7] == "-":
-            tenant = self._owner_tenant(max_user_id)
-            if tenant is not None:
-                try:
-                    from datetime import datetime as dt
-                    dt.strptime(text, "%Y-%m-%d")
-                    return self._owner_bookings_for_day(chat_id, max_user_id, text)
-                except Exception:
-                    pass
+            session = self.sessions.get(chat_id)
+            step = (session.current_step if session else None) or sm.START
+            booking_steps = {
+                sm.CHOOSE_TENANT, sm.CHOOSE_SERVICE, sm.CHOOSE_MASTER,
+                sm.ENTER_DATE, sm.CHOOSE_SLOT, sm.ENTER_TIME,
+                sm.ENTER_NAME, sm.ENTER_PHONE, sm.CONFIRM,
+            }
+            if step not in booking_steps:
+                tenant = self._owner_tenant(max_user_id)
+                if tenant is not None:
+                    try:
+                        from datetime import datetime as dt
+                        dt.strptime(text, "%Y-%m-%d")
+                        return self._owner_bookings_for_day(chat_id, max_user_id, text)
+                    except Exception:
+                        pass
         return None
 
     def _owner_tenant(self, max_user_id: int):
