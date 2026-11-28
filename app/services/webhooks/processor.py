@@ -42,6 +42,8 @@ class WebhookEventProcessor:
                     text = resp.get("text")
                     if not chat_id or not text:
                         continue
+                    if resp.get("queued"):
+                        continue
                     payload = {"text": text}
                     for k, v in resp.items():
                         if k not in {"chat_id", "text"}:

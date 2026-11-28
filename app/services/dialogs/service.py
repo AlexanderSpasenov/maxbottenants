@@ -1099,9 +1099,20 @@ class DialogService:
             payload={"text": client_text, "user_id": booking.max_user_id},
         )
         owner_text = f"Заявка переведена в статус: {self._status_label(new_status)}.\n{details}"
+        # Send menu buttons to client after status update
+        client_member = self.members.get_by_tenant_user(booking.tenant_id, booking.max_user_id)
+        client_is_owner = bool(client_member and client_member.role == "owner")
+        client_menu = self._menu_message(booking.chat_id, tenant.display_name if tenant else "Салон", booking.max_user_id, is_owner=client_is_owner)
+        self.outbox.enqueue(
+            tenant_id=booking.tenant_id,
+            chat_id=booking.chat_id,
+            payload={"text": client_menu["text"], "user_id": booking.max_user_id, "attachments": client_menu.get("attachments")},
+        )
+        client_menu["queued"] = True
         return [
             {"chat_id": chat_id, "user_id": max_user_id, "text": owner_text},
             {"chat_id": booking.chat_id, "user_id": booking.max_user_id, "text": client_text, "queued": True},
+            client_menu,
         ]
 
     def _resolve_tenant(self, session):
