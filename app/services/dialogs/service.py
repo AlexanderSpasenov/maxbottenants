@@ -171,9 +171,8 @@ class DialogService:
             "Кто вы?"
         )
         rows = [[("Я клиент", "role:client"), ("Я администратор салона", "role:owner")]]
-        rows.append([("Зарегистрировать салон", "role:register")])
         if not tenants:
-            text += "\n\nПока нет активных салонов, но вы можете зарегистрировать свой."
+            text += "\n\nПока нет активных салонов. Администратор может зарегистрировать новый салон."
         return [{
             "chat_id": chat_id,
             "user_id": max_user_id,
@@ -212,7 +211,11 @@ class DialogService:
             self.db.commit()
             return [{
                 "chat_id": chat_id, "user_id": max_user_id,
-                "text": "Введите идентификатор салона администратора (код/ссылку, которую вам выдали).",
+                "text": "Введите идентификатор салона администратора или зарегистрируйте новый салон:",
+                "attachments": [self._kb([
+                    [("Зарегистрировать салон", "role:register")],
+                    [("Назад", "role:back")],
+                ])],
             }]
 
         if text == "role:register":
@@ -225,14 +228,14 @@ class DialogService:
                 "text": "Введите название нового салона. Вы станете его администратором.",
             }]
 
+        if text == "role:back":
+            return self._welcome(chat_id, max_user_id, session)
+
         self.db.commit()
         return [{
             "chat_id": chat_id, "user_id": max_user_id,
             "text": "Выберите вариант кнопкой:",
-            "attachments": [self._kb([
-                [("Я клиент", "role:client"), ("Я администратор салона", "role:owner")],
-                [("Зарегистрировать салон", "role:register")],
-            ])],
+            "attachments": [self._kb([[("Я клиент", "role:client"), ("Я администратор салона", "role:owner")]])],
         }]
 
     def _handle_register_salon_name(self, session, chat_id: int, max_user_id: int, text: str):
@@ -265,7 +268,11 @@ class DialogService:
             token = parts[1].strip() if len(parts) > 1 else ""
         if not token:
             self.db.commit()
-            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Введите идентификатор салона администратора."}]
+            return [{
+                "chat_id": chat_id, "user_id": max_user_id,
+                "text": "Введите идентификатор салона администратора или зарегистрируйте новый салон:",
+                "attachments": [self._kb([[("Зарегистрировать салон", "role:register")], [("Назад", "role:back")]])],
+            }]
 
         link = self.links.get_by_token(token)
         if link and link.tenant and link.link_type in {"owner", "admin"}:
@@ -297,7 +304,8 @@ class DialogService:
         self.db.commit()
         return [{
             "chat_id": chat_id, "user_id": max_user_id,
-            "text": "Идентификатор не найден. Проверьте код и попробуйте ещё раз, или нажмите /start.",
+            "text": "Идентификатор не найден. Проверьте код и попробуйте ещё раз, или зарегистрируйте новый салон.",
+            "attachments": [self._kb([[("Зарегистрировать салон", "role:register")], [("Назад", "role:back")]])],
         }]
 
     @staticmethod
