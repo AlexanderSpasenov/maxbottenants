@@ -1,5 +1,6 @@
 from typing import Any
 
+import certifi
 import httpx
 
 from app.core.config import get_settings
@@ -29,7 +30,7 @@ class RealMaxClient(MaxClient):
         if "user_id" not in params and "chat_id" not in params:
             # Fallback: treat chat_id arg as user_id for direct messages.
             params["user_id"] = str(chat_id)
-        async with httpx.AsyncClient(base_url=self.base_url, timeout=10.0) as client:
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=10.0, verify=certifi.where()) as client:
             response = await client.post(
                 "/messages",
                 headers=self._headers(),
@@ -40,7 +41,7 @@ class RealMaxClient(MaxClient):
             return response.json()
 
     async def answer_callback(self, callback_id: str, **kwargs: Any) -> dict[str, Any]:
-        async with httpx.AsyncClient(base_url=self.base_url, timeout=10.0) as client:
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=10.0, verify=certifi.where()) as client:
             response = await client.post(
                 "/answers",
                 headers=self._headers(),
