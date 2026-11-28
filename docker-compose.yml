@@ -31,6 +31,7 @@ services:
     build: .
     env_file:
       - .env.example
+      - .env
     environment:
       DATABASE_URL: postgresql+psycopg://maxbot:maxbot@postgres:5432/maxbottenants
       DATABASE_URL_SYNC: postgresql+psycopg://maxbot:maxbot@postgres:5432/maxbottenants
@@ -50,6 +51,7 @@ services:
     build: .
     env_file:
       - .env.example
+      - .env
     environment:
       DATABASE_URL: postgresql+psycopg://maxbot:maxbot@postgres:5432/maxbottenants
       DATABASE_URL_SYNC: postgresql+psycopg://maxbot:maxbot@postgres:5432/maxbottenants
