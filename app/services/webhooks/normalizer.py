@@ -51,7 +51,11 @@ def normalize_max_event(payload: dict[str, Any]) -> dict[str, Any]:
         or body.get("payload")
     )
     text = body.get("text") or raw.get("text")
-    if not text and callback_payload is not None:
+    # For callbacks, payload/data carries the button action; body.text is the
+    # message text and must not override callback payload.
+    if callback_payload is not None and str(event_type) == "message_callback":
+        text = str(callback_payload)
+    elif not text and callback_payload is not None:
         text = str(callback_payload)
 
     normalized = {
