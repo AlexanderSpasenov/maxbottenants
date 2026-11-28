@@ -449,9 +449,18 @@ class DialogService:
             "cancelled": "Отменена",
         }.get(str(status or ""), str(status or "-"))
 
-    def _menu_message(self, chat_id: int, tenant_name: str, user_id: int | None = None, is_owner: bool = False) -> dict[str, Any]:
+    def _tenant_client_link(self, tenant) -> str:
+        from app.core.config import get_settings
+        username = (get_settings().max_bot_username or "").strip().lstrip("@")
+        slug = getattr(tenant, "slug", "")
+        if username:
+            return f"https://max.ru/{username}?start={slug}"
+        return f"/start {slug}"
+
+    def _menu_message(self, chat_id: int, tenant_name: str, user_id: int | None = None, is_owner: bool = False, tenant=None) -> dict[str, Any]:
         if is_owner:
             rows = [[("Записать клиента", "1"), ("Заявки салона", "owner:bookings")], [("Мои заявки", "2")]]
+            rows.append([("Ссылка для клиента", "owner:copy_link")])
         else:
             rows = [[("Записаться", "1"), ("Мои заявки", "2")]]
         msg: dict[str, Any] = {
@@ -461,6 +470,7 @@ class DialogService:
         }
         if user_id is not None:
             msg["user_id"] = user_id
+        # stash tenant slug for copy-link handler via text? not needed, resolve by owner
         return msg
 
     def _handle_text_step(self, session, chat_id: int, max_user_id: int, text: str):
@@ -1084,6 +1094,16 @@ class DialogService:
 
         if text == "owner:bookings":
             return self._owner_bookings_dates(chat_id, max_user_id)
+        if text == "owner:copy_link":
+            tenant = self._owner_tenant(max_user_id)
+            if tenant is None:
+                return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Вы не привязаны как владелец салона."}]
+            link = self._tenant_client_link(tenant)
+            return [{
+                "chat_id": chat_id, "user_id": max_user_id,
+                "text": f"Ссылка для клиентов салона «{tenant.display_name}»:\n{link}\n\nНажмите и удерживайте ссылку, чтобы скопировать.",
+                "attachments": [self._kb([[("Меню", "/menu")]])],
+            }]
         if text.startswith("owner:bookings:"):
             day = text.split(":", 2)[2]
             return self._owner_bookings_for_day(chat_id, max_user_id, day)

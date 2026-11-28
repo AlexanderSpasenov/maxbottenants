@@ -23,6 +23,7 @@ class Settings(BaseSettings):
 
     max_api_base_url: str = "https://platform-api2.max.ru"
     max_bot_token: str = ""
+    max_bot_username: str = ""
     max_webhook_secret: str = ""
     max_tls_verify: str = "true"  # true|false|/path/to/ca.pem
     max_webhook_enabled: bool = False
