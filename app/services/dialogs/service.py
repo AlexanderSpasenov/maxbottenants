@@ -278,9 +278,10 @@ class DialogService:
         }.get(str(status or ""), str(status or "-"))
 
     def _menu_message(self, chat_id: int, tenant_name: str, user_id: int | None = None, is_owner: bool = False) -> dict[str, Any]:
-        rows = [[("Записаться", "1"), ("Мои заявки", "2")]]
         if is_owner:
-            rows.append([("Заявки салона", "owner:bookings")])
+            rows = [[("Записать клиента", "1"), ("Заявки салона", "owner:bookings")], [("Мои заявки", "2")]]
+        else:
+            rows = [[("Записаться", "1"), ("Мои заявки", "2")]]
         msg: dict[str, Any] = {
             "chat_id": chat_id,
             "text": f"Салон: {tenant_name}\nВыберите действие:",
@@ -314,7 +315,12 @@ class DialogService:
                 if not services:
                     self.db.commit()
                     return [{"chat_id": chat_id, "user_id": max_user_id, "text": "В салоне пока нет активных услуг."}]
-                ctx = {"tenant_slug": tenant.slug, "services": [str(s.id) for s in services], "role": member.role if member else "client"}
+                ctx = {
+                    "tenant_slug": tenant.slug,
+                    "services": [str(s.id) for s in services],
+                    "role": member.role if member else "client",
+                    "admin_created": bool(is_owner),
+                }
                 session.current_step = sm.CHOOSE_SERVICE
                 session.context = ctx
                 self.db.add(session)
@@ -325,7 +331,7 @@ class DialogService:
                     rows.append([(label[:60], str(i))])
                 return [{
                     "chat_id": chat_id, "user_id": max_user_id,
-                    "text": "Выберите услугу:",
+                    "text": "Выберите услугу для клиента:" if is_owner else "Выберите услугу:",
                     "attachments": [self._kb(rows)],
                 }]
             if text == "2":
@@ -752,7 +758,8 @@ class DialogService:
         slot_start = None
         slot_end = None
         booking_mode = tenant.booking_mode
-        status = "awaiting_salon"
+        admin_created = bool(ctx.get("admin_created"))
+        status = "confirmed" if admin_created else "awaiting_salon"
         expires_at = None
         if booking_mode == "online_booking" and ctx.get("slot_start"):
             from datetime import datetime as dt
@@ -762,12 +769,13 @@ class DialogService:
             dur = int(ctx.get("duration_snapshot") or 0)
             buf = int(ctx.get("buffer_minutes") or 0)
             slot_end = slot_start + timedelta(minutes=dur + buf) if dur else None
-            if getattr(tenant, "online_booking_auto_confirm", True):
-                status = "confirmed"
-            else:
-                status = "pending_confirmation"
-                hold = int(getattr(tenant, "online_booking_hold_minutes", 15) or 15)
-                expires_at = datetime.now(UTC) + timedelta(minutes=max(hold, 1))
+            if not admin_created:
+                if getattr(tenant, "online_booking_auto_confirm", True):
+                    status = "confirmed"
+                else:
+                    status = "pending_confirmation"
+                    hold = int(getattr(tenant, "online_booking_hold_minutes", 15) or 15)
+                    expires_at = datetime.now(UTC) + timedelta(minutes=max(hold, 1))
 
         window_start, window_end = self._booking_window(tenant, ctx)
         if ctx.get("master_id") and window_start and window_end:
@@ -832,17 +840,24 @@ class DialogService:
         session.current_step = (
             sm.AWAITING_SALON if status in {"awaiting_salon", "pending_confirmation"} else sm.MENU
         )
-        session.context = {"tenant_slug": tenant.slug, "last_booking_id": str(booking.id)}
+        session.context = {"tenant_slug": tenant.slug, "last_booking_id": str(booking.id), "role": ctx.get("role")}
         self.db.add(session)
 
-        owner_msgs = self._notify_owners(tenant.id, booking, ctx)
+        owner_msgs = [] if ctx.get("admin_created") else self._notify_owners(tenant.id, booking, ctx)
         self.db.commit()
 
-        if booking.status == "confirmed":
-            when = f"{ctx.get('preferred_date')} {ctx.get('preferred_time_range') or ''}".strip()
+        when = f"{ctx.get('preferred_date')} {ctx.get('preferred_time_range') or ''}".strip()
+        if ctx.get("admin_created"):
+            client_text = (
+                f"Клиент записан.\n"
+                f"Услуга: {ctx.get('service_name')}\n"
+                f"Мастер: {ctx.get('master_name')}\n"
+                f"Дата/время: {when}\n"
+                f"Клиент: {ctx.get('customer_name')} {mask_phone(ctx.get('customer_phone'))}"
+            )
+        elif booking.status == "confirmed":
             client_text = f"Запись подтверждена. Время: {when}"
         elif booking.status == "pending_confirmation":
-            when = f"{ctx.get('preferred_date')} {ctx.get('preferred_time_range') or ''}".strip()
             client_text = (
                 f"Запись зарезервирована на {when}. "
                 "Ожидает подтверждения салона."
