@@ -194,6 +194,35 @@ class DialogService:
             },
         }
 
+    @staticmethod
+    def _date_rows(tenant_tz: str, days: int = 7) -> list[list[tuple[str, str]]]:
+        from zoneinfo import ZoneInfo
+        from datetime import datetime, timedelta
+        tz = ZoneInfo(tenant_tz or "Europe/Moscow")
+        now = datetime.now(tz).date()
+        weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+        rows: list[list[tuple[str, str]]] = []
+        for i in range(days):
+            d = now + timedelta(days=i)
+            label = f"{d.strftime('%d.%m')} ({weekdays[d.weekday()]})"
+            if i == 0:
+                label = f"Сегодня {label}"
+            elif i == 1:
+                label = f"Завтра {label}"
+            rows.append([(label, d.isoformat())])
+        return rows
+
+    @staticmethod
+    def _status_label(status: str | None) -> str:
+        return {
+            "awaiting_salon": "Ожидает подтверждения салона",
+            "pending_confirmation": "Ожидает подтверждения салона",
+            "confirmed": "Подтверждена",
+            "rejected": "Отклонена",
+            "expired": "Истекла",
+            "cancelled": "Отменена",
+        }.get(str(status or ""), str(status or "-"))
+
     def _menu_message(self, chat_id: int, tenant_name: str, user_id: int | None = None) -> dict[str, Any]:
         msg: dict[str, Any] = {
             "chat_id": chat_id,
@@ -207,6 +236,7 @@ class DialogService:
     def _handle_text_step(self, session, chat_id: int, max_user_id: int, text: str):
         step = session.current_step or sm.START
         ctx = dict(session.context or {})
+        ctx["max_user_id"] = max_user_id
 
         if step == sm.CHOOSE_TENANT:
             return self._choose_tenant(session, chat_id, max_user_id, text)
@@ -230,12 +260,15 @@ class DialogService:
                 session.context = ctx
                 self.db.add(session)
                 self.db.commit()
-                lines = ["Выберите услугу:"]
                 rows = []
                 for i, svc in enumerate(services, start=1):
-                    lines.append(f"{i}. {svc.name} - {svc.price}, {svc.duration_minutes}m")
-                    rows.append([(f"{i}. {svc.name[:40]}", str(i))])
-                return [{"chat_id": chat_id, "user_id": max_user_id, "text": "\n".join(lines), "attachments": [self._kb(rows)]}]
+                    label = f"{svc.name} — {svc.price}₽, {svc.duration_minutes} мин"
+                    rows.append([(label[:60], str(i))])
+                return [{
+                    "chat_id": chat_id, "user_id": max_user_id,
+                    "text": "Выберите услугу:",
+                    "attachments": [self._kb(rows)],
+                }]
             if text == "2":
                 bookings = self.bookings.list_for_user(tenant.id, max_user_id)
                 if not bookings:
@@ -243,18 +276,28 @@ class DialogService:
                     return [{"chat_id": chat_id, "user_id": max_user_id, "text": "У вас пока нет заявок."}]
                 lines = ["Ваши заявки:"]
                 for b in bookings[:10]:
-                    date = b.preferred_date or "-"
+                    dt = b.preferred_date or "-"
                     tr = b.preferred_time_range or ""
-                    lines.append(f"- {b.id} | {b.status} | {date} {tr}")
+                    svc_name = ""
+                    if b.service_id:
+                        svc = self.catalog.get_service(tenant.id, b.service_id)
+                        if svc:
+                            svc_name = svc.name
+                    status = self._status_label(b.status)
+                    part = f"- {status}"
+                    if svc_name:
+                        part += f", {svc_name}"
+                    part += f", {dt} {tr}".rstrip()
+                    lines.append(part)
                 self.db.commit()
                 return [{"chat_id": chat_id, "user_id": max_user_id, "text": "\n".join(lines)}]
             self.db.commit()
             return [self._menu_message(chat_id, tenant.display_name, max_user_id)]
 
         if step == sm.CHOOSE_SERVICE:
-            return self._choose_service(session, tenant, chat_id, text, ctx)
+            return self._choose_service(session, tenant, chat_id, text, ctx, max_user_id)
         if step == sm.CHOOSE_MASTER:
-            return self._choose_master(session, tenant, chat_id, text, ctx)
+            return self._choose_master(session, tenant, chat_id, text, ctx, max_user_id)
         if step == sm.CHOOSE_SLOT:
             return self._choose_slot(session, tenant, chat_id, max_user_id, text, ctx)
         if step == sm.ENTER_DATE:
@@ -263,26 +306,42 @@ class DialogService:
                 self.db.commit()
                 return [{
                     "chat_id": chat_id, "user_id": max_user_id,
-                    "text": "Неверная дата. Формат YYYY-MM-DD, не в прошлом.",
+                    "text": "Неверная дата. Выберите дату кнопкой или введите YYYY-MM-DD.",
+                    "attachments": [self._kb(self._date_rows(getattr(tenant, "timezone", "Europe/Moscow"), 7))],
                 }]
             ctx["preferred_date"] = normalized
             if tenant.booking_mode == "online_booking":
-                return self._show_slots(session, tenant, chat_id, ctx)
+                return self._show_slots(session, tenant, chat_id, ctx, max_user_id)
             session.current_step = sm.ENTER_TIME
             session.context = ctx
             self.db.add(session)
             self.db.commit()
-            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Укажите время (например 15:00-17:00)."}]
+            time_rows = [
+                [("10:00", "10:00"), ("11:00", "11:00"), ("12:00", "12:00")],
+                [("13:00", "13:00"), ("14:00", "14:00"), ("15:00", "15:00")],
+                [("16:00", "16:00"), ("17:00", "17:00"), ("18:00", "18:00")],
+                [("19:00", "19:00"), ("20:00", "20:00")],
+            ]
+            return [{
+                "chat_id": chat_id, "user_id": max_user_id,
+                "text": "Выберите время:",
+                "attachments": [self._kb(time_rows)],
+            }]
         if step == sm.ENTER_TIME:
             normalized = self._normalize_time_range(text)
             if not normalized:
                 self.db.commit()
-                return [
-                    {
-                        "chat_id": chat_id, "user_id": max_user_id,
-                        "text": "Неверное время. Формат HH:MM или HH:MM-HH:MM.",
-                    }
+                time_rows = [
+                    [("10:00", "10:00"), ("11:00", "11:00"), ("12:00", "12:00")],
+                    [("13:00", "13:00"), ("14:00", "14:00"), ("15:00", "15:00")],
+                    [("16:00", "16:00"), ("17:00", "17:00"), ("18:00", "18:00")],
+                    [("19:00", "19:00"), ("20:00", "20:00")],
                 ]
+                return [{
+                    "chat_id": chat_id, "user_id": max_user_id,
+                    "text": "Неверное время. Выберите кнопку или введите HH:MM / HH:MM-HH:MM.",
+                    "attachments": [self._kb(time_rows)],
+                }]
             ctx["preferred_time_range"] = normalized
             session.current_step = sm.ENTER_NAME
             session.context = ctx
@@ -380,18 +439,15 @@ class DialogService:
         session.context = ctx
         self.db.add(session)
         self.db.commit()
-        lines = ["Выберите мастера:"]
         rows = []
         active = self.catalog.list_active_masters(tenant.id)
         for i, mid in enumerate(masters, start=1):
             master = next((m for m in active if m.id == mid), None)
             name = master.display_name if master else "Мастер"
-            lines.append(f"{i}. {name}")
-            rows.append([(f"{i}. {name[:40]}", str(i))])
+            rows.append([(name[:60], str(i))])
         any_idx = str(len(masters) + 1)
-        lines.append(f"{any_idx}. Любой мастер")
-        rows.append([(f"{any_idx}. Любой мастер", any_idx)])
-        return [{"chat_id": chat_id, "user_id": uid, "text": "\n".join(lines), "attachments": [self._kb(rows)]}]
+        rows.append([("Любой мастер", any_idx)])
+        return [{"chat_id": chat_id, "user_id": uid, "text": "Выберите мастера:", "attachments": [self._kb(rows)]}]
 
     def _choose_master(self, session, tenant, chat_id: int, text: str, ctx: dict[str, Any], user_id: int | None = None):
         uid = user_id or ctx.get("max_user_id")
@@ -420,13 +476,18 @@ class DialogService:
                 "chat_id": chat_id, "user_id": uid,
                 "text": "Для online_booking выберите конкретного мастера.",
             }]
-        return [{"chat_id": chat_id, "user_id": uid, "text": "Укажите дату (например 2026-11-30)."}]
+        return [{
+            "chat_id": chat_id, "user_id": uid,
+            "text": "Выберите дату:",
+            "attachments": [self._kb(self._date_rows(getattr(tenant, "timezone", "Europe/Moscow"), 7))],
+        }]
 
-    def _show_slots(self, session, tenant, chat_id: int, ctx: dict):
+    def _show_slots(self, session, tenant, chat_id: int, ctx: dict, user_id: int | None = None):
         from datetime import date as date_type
 
         from app.services.scheduling.slots import get_available_slots
 
+        uid = user_id or ctx.get("max_user_id")
         master_id = uuid.UUID(ctx["master_id"]) if ctx.get("master_id") else None
         if master_id is None:
             self.db.commit()
@@ -460,21 +521,24 @@ class DialogService:
             self.db.commit()
             return [{
                 "chat_id": chat_id, "user_id": uid,
-                "text": "Нет свободных слотов на эту дату. Введите другую дату YYYY-MM-DD.",
+                "text": "Нет свободных слотов на эту дату. Выберите другую дату:",
+                "attachments": [self._kb(self._date_rows(getattr(tenant, "timezone", "Europe/Moscow"), 7))],
             }]
         ctx["slots"] = [s.start.isoformat() for s in slots]
         session.current_step = sm.CHOOSE_SLOT
         session.context = ctx
         self.db.add(session)
         self.db.commit()
-        lines = ["Выберите слот:"]
         rows = []
         for i, sl in enumerate(slots, start=1):
             local = sl.start.astimezone(tz)
-            label = local.strftime('%Y-%m-%d %H:%M')
-            lines.append(f"{i}. {label}")
-            rows.append([(f"{i}. {label}", str(i))])
-        return [{"chat_id": chat_id, "user_id": uid, "text": "\n".join(lines), "attachments": [self._kb(rows)]}]
+            label = local.strftime('%H:%M')
+            rows.append([(label, str(i))])
+        return [{
+            "chat_id": chat_id, "user_id": uid,
+            "text": f"Выберите время на {pref_day.strftime('%d.%m.%Y')}:",
+            "attachments": [self._kb(rows)],
+        }]
     def _choose_slot(self, session, tenant, chat_id: int, max_user_id: int, text: str, ctx: dict):
         slots = ctx.get("slots") or []
         if not text.isdigit():
@@ -601,15 +665,15 @@ class DialogService:
 
         if booking.status == "confirmed":
             when = f"{ctx.get('preferred_date')} {ctx.get('preferred_time_range') or ''}".strip()
-            client_text = f"Запись #{booking.id} подтверждена. Время: {when}"
+            client_text = f"Запись подтверждена. Время: {when}"
         elif booking.status == "pending_confirmation":
             when = f"{ctx.get('preferred_date')} {ctx.get('preferred_time_range') or ''}".strip()
             client_text = (
-                f"Запись #{booking.id} зарезервирована на {when}. "
+                f"Запись зарезервирована на {when}. "
                 "Ожидает подтверждения салона."
             )
         else:
-            client_text = f"Заявка #{booking.id} создана. Статус: ожидает подтверждения салона."
+            client_text = "Заявка создана. Статус: ожидает подтверждения салона."
         client_msg = {"chat_id": chat_id, "user_id": max_user_id, "text": client_text}
         return [client_msg, *owner_msgs]
 
@@ -618,7 +682,7 @@ class DialogService:
         msgs: list[dict[str, Any]] = []
         for owner in owners:
             text = (
-                f"Новая заявка #{booking.id}\n"
+                f"Новая заявка\n"
                 f"Услуга: {ctx.get('service_name')}\n"
                 f"Мастер: {ctx.get('master_name')}\n"
                 f"Дата: {ctx.get('preferred_date')}\n"
@@ -673,9 +737,9 @@ class DialogService:
         new_status = booking.status
 
         client_text = (
-            f"Ваша заявка #{booking.id} подтверждена салоном."
+            "Ваша заявка подтверждена салоном."
             if new_status == "confirmed"
-            else f"Заявка #{booking.id} отклонена салоном. Выберите другое время /start."
+            else "Заявка отклонена салоном. Выберите другое время /start."
         )
         self.outbox.enqueue(
             tenant_id=booking.tenant_id,
@@ -683,7 +747,7 @@ class DialogService:
             payload={"text": client_text, "user_id": booking.max_user_id},
         )
 
-        owner_text = f"Заявка #{booking.id} переведена в статус {new_status}."
+        owner_text = f"Заявка переведена в статус: {self._status_label(new_status)}."
         return [
             {"chat_id": chat_id, "user_id": max_user_id, "text": owner_text},
             {"chat_id": booking.chat_id, "text": client_text, "queued": True},

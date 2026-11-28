@@ -140,7 +140,7 @@ def test_request_only_happy_path_creates_booking_and_notifies_owner(db_session):
 
     outbox = db_session.query(OutboxMessage).filter_by(tenant_id=t1.id, chat_id=900001).all()
     assert len(outbox) >= 1
-    assert f"#{booking.id}" in outbox[0].payload["text"]
+    assert str(booking.id) in outbox[0].payload["text"]
     assert "/confirm" in outbox[0].payload["text"]
     assert "+79990000000" not in outbox[0].payload["text"]
     assert "0000" in outbox[0].payload["text"]
