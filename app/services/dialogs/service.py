@@ -837,9 +837,7 @@ class DialogService:
             display_name=ctx.get("customer_name"),
             phone_encrypted=encrypt_value(phone),
         )
-        session.current_step = (
-            sm.AWAITING_SALON if status in {"awaiting_salon", "pending_confirmation"} else sm.MENU
-        )
+        session.current_step = sm.MENU
         session.context = {"tenant_slug": tenant.slug, "last_booking_id": str(booking.id), "role": ctx.get("role")}
         self.db.add(session)
 
@@ -865,7 +863,10 @@ class DialogService:
         else:
             client_text = "Заявка создана. Статус: ожидает подтверждения салона."
         client_msg = {"chat_id": chat_id, "user_id": max_user_id, "text": client_text}
-        return [client_msg, *owner_msgs]
+        member = self.members.get_by_tenant_user(tenant.id, max_user_id)
+        is_owner = bool(member and member.role == "owner")
+        menu_msg = self._menu_message(chat_id, tenant.display_name, max_user_id, is_owner=is_owner)
+        return [client_msg, *owner_msgs, menu_msg]
 
     def _notify_owners(self, tenant_id: uuid.UUID, booking: Booking, ctx: dict):
         owners = self.members.list_active_owners(tenant_id)
