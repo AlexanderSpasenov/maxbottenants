@@ -32,12 +32,13 @@ def normalize_max_event(payload: dict[str, Any]) -> dict[str, Any]:
         or _as_dict(callback.get("message")).get("chat_id")
         or raw.get("chat_id")
     )
+    # For callbacks prefer the clicking user; message.sender is the bot.
     user_id = (
-        sender.get("user_id")
-        or sender.get("id")
-        or callback.get("user_id")
+        callback.get("user_id")
         or _as_dict(callback.get("user")).get("user_id")
         or _as_dict(callback.get("user")).get("id")
+        or sender.get("user_id")
+        or sender.get("id")
         or raw.get("user_id")
     )
     mid = msg.get("mid") or body.get("mid") or msg.get("id") or raw.get("message_id")

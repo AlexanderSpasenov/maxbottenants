@@ -53,6 +53,17 @@ class WebhookEventProcessor:
                         payload=payload,
                         dedupe_key=dedupe,
                     )
+            # Best-effort: acknowledge callback to remove MAX client loading state.
+            try:
+                if (event.event_type or "") == "message_callback":
+                    from app.services.webhooks.normalizer import normalize_max_event
+                    from app.services.max.sender import get_max_client
+                    import asyncio
+                    cb_id = normalize_max_event(event.payload or {}).get("callback_id")
+                    if cb_id:
+                        asyncio.run(get_max_client().answer_callback(str(cb_id)))
+            except Exception:
+                logger.warning("Callback answer failed for event=%s", event.event_key, exc_info=True)
             self.repo.mark_processed(event)
         except Exception as exc:
             logger.exception("Webhook event processing failed: %s", event.event_key)
