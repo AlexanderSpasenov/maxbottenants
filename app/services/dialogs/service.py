@@ -219,7 +219,7 @@ class DialogService:
             }]
 
         if text == "role:register":
-            return self._register_salon(chat_id, max_user_id, session)
+            return self._start_register_salon(chat_id, max_user_id, session)
 
         if text == "role:back":
             return self._welcome(chat_id, max_user_id, session)
@@ -231,9 +231,66 @@ class DialogService:
             "attachments": [self._kb([[("Я клиент", "role:client"), ("Я администратор салона", "role:owner")]])],
         }]
 
-    def _register_salon(self, chat_id: int, max_user_id: int, session=None) -> list[dict[str, Any]]:
-        name = f"Салон {max_user_id}"
-        tenant = self.tenants.create_with_unique_slug(display_name=name)
+    CITY_TZ = {
+        "москва": "Europe/Moscow",
+        "санкт-петербург": "Europe/Moscow",
+        "спб": "Europe/Moscow",
+        "казань": "Europe/Moscow",
+        "нижний новгород": "Europe/Moscow",
+        "самара": "Europe/Samara",
+        "екатеринбург": "Asia/Yekaterinburg",
+        "новосибирск": "Asia/Novosibirsk",
+        "красноярск": "Asia/Krasnoyarsk",
+        "иркутск": "Asia/Irkutsk",
+        "владивосток": "Asia/Vladivostok",
+        "калининград": "Europe/Kaliningrad",
+        "сочи": "Europe/Moscow",
+        "краснодар": "Europe/Moscow",
+        "ростов-на-дону": "Europe/Moscow",
+        "уфа": "Asia/Yekaterinburg",
+        "челябинск": "Asia/Yekaterinburg",
+        "омск": "Asia/Omsk",
+        "пермь": "Asia/Yekaterinburg",
+        "волгоград": "Europe/Volgograd",
+    }
+
+    def _city_timezone(self, city: str) -> str:
+        c = (city or "").strip().lower()
+        c = " ".join(c.split())
+        return self.CITY_TZ.get(c, "Europe/Moscow")
+
+    def _start_register_salon(self, chat_id: int, max_user_id: int, session=None) -> list[dict[str, Any]]:
+        session = session or self.sessions.get(chat_id)
+        self.sessions.upsert(
+            chat_id=chat_id, max_user_id=max_user_id,
+            current_tenant_id=None,
+            current_step=sm.REGISTER_SALON_NAME,
+            context={"register_salon": True},
+        )
+        self.db.commit()
+        return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Введите название салона:"}]
+
+    def _handle_register_salon_name(self, session, chat_id: int, max_user_id: int, text: str):
+        name = (text or "").strip()
+        if len(name) < 2:
+            self.db.commit()
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Название слишком короткое. Введите название салона:"}]
+        if len(name) > 255:
+            name = name[:255].strip()
+        session.current_step = sm.REGISTER_SALON_CITY
+        session.context = {"register_salon": True, "register_name": name}
+        self.db.add(session)
+        self.db.commit()
+        return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Введите город салона (например: Москва, Казань, Екатеринбург):"}]
+
+    def _handle_register_salon_city(self, session, chat_id: int, max_user_id: int, text: str):
+        city = (text or "").strip()
+        if len(city) < 2:
+            self.db.commit()
+            return [{"chat_id": chat_id, "user_id": max_user_id, "text": "Введите город салона (например: Москва, Казань):"}]
+        name = str((session.context or {}).get("register_name") or "").strip() or f"Салон {max_user_id}"
+        tz = self._city_timezone(city)
+        tenant = self.tenants.create_with_unique_slug(display_name=name, timezone=tz)
         self.members.create(tenant_id=tenant.id, max_user_id=max_user_id, role="owner")
         self.sessions.upsert(
             chat_id=chat_id, max_user_id=max_user_id, current_tenant_id=tenant.id,
@@ -241,13 +298,12 @@ class DialogService:
             context={"tenant_slug": tenant.slug, "role": "owner"},
         )
         self.db.commit()
-        # Show initial /start screen for this admin
-        return self._handle_start(session or self.sessions.get(chat_id), chat_id, max_user_id, "/start")
+        return self._handle_start(self.sessions.get(chat_id), chat_id, max_user_id, "/start")
 
     def _handle_admin_token(self, session, chat_id: int, max_user_id: int, text: str):
         token = text.strip()
         if token == "role:register":
-            return self._register_salon(chat_id, max_user_id, session)
+            return self._start_register_salon(chat_id, max_user_id, session)
         if token == "role:back":
             return self._welcome(chat_id, max_user_id, session)
         if token.startswith("/start"):
@@ -416,6 +472,10 @@ class DialogService:
             return self._handle_role_choice(session, chat_id, max_user_id, text)
         if step == sm.ENTER_ADMIN_TOKEN:
             return self._handle_admin_token(session, chat_id, max_user_id, text)
+        if step == sm.REGISTER_SALON_NAME:
+            return self._handle_register_salon_name(session, chat_id, max_user_id, text)
+        if step == sm.REGISTER_SALON_CITY:
+            return self._handle_register_salon_city(session, chat_id, max_user_id, text)
         if step == sm.CHOOSE_TENANT:
             return self._choose_tenant(session, chat_id, max_user_id, text)
 
